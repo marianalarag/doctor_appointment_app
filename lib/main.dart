@@ -41,15 +41,16 @@ class MyApp extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide.none,
           ),
-          contentPadding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         ),
       ),
 
-      // Pantalla inicial (login)
-      initialRoute: '/',
+      // Pantalla inicial depende del estado de autenticación
+      home: const AuthGate(),
+
+      // Definición de rutas
       routes: {
-        '/': (context) => const LoginPage(),
+        '/login': (context) => const LoginPage(),
         '/register': (context) => const RegisterPage(),
         '/reset': (context) => const ResetPasswordPage(),
         '/home': (context) => const HomePage(),
@@ -61,6 +62,34 @@ class MyApp extends StatelessWidget {
         '/profile_form': (context) => ProfileFormPage(
           uid: FirebaseAuth.instance.currentUser?.uid ?? '',
         ),
+      },
+    );
+  }
+}
+
+/// Controla si el usuario está autenticado o no
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        // Mientras se carga el estado de Firebase
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        // Si el usuario está autenticado
+        if (snapshot.hasData) {
+          return const HomePage();
+        }
+
+        // Si no está autenticado
+        return const LoginPage();
       },
     );
   }
