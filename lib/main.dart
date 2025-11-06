@@ -59,9 +59,18 @@ class MyApp extends StatelessWidget {
         '/settings': (context) => const SettingsPage(),
         '/privacy': (context) => const PrivacyPage(),
         '/about': (context) => const AboutPage(),
-        '/profile_form': (context) => ProfileFormPage(
-          uid: FirebaseAuth.instance.currentUser?.uid ?? '',
-        ),
+      },
+
+      // Ruta con parámetros se maneja mediante onGenerateRoute
+      onGenerateRoute: (settings) {
+        // Manejo de la ruta '/profile_form' con parámetros
+        if (settings.name == '/profile_form') {
+          final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+          return MaterialPageRoute(
+            builder: (context) => ProfileFormPage(uid: uid),
+          );
+        }
+        return null;
       },
     );
   }
@@ -79,7 +88,25 @@ class AuthGate extends StatelessWidget {
         // Mientras se carga el estado de Firebase
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(
+                    color: Colors.teal,
+                  ),
+                  SizedBox(height: 20),
+                  Text(
+                    'Cargando DoctorApp...',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.teal,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           );
         }
 

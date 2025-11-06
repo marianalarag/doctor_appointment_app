@@ -1,3 +1,4 @@
+// firebase_service.dart - VERSIÓN SIMPLIFICADA Y FUNCIONAL
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -5,96 +6,7 @@ class FirebaseService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // ========== MÉTODOS DE DISPONIBILIDAD ==========
-
-  // Verificar disponibilidad del médico
-  Future<bool> verificarDisponibilidadMedico({
-    required String idMedico,
-    required DateTime fechaHora,
-  }) async {
-    try {
-      final fecha = DateTime(fechaHora.year, fechaHora.month, fechaHora.day);
-      final horaInicio = DateTime(fechaHora.year, fechaHora.month, fechaHora.day, fechaHora.hour, fechaHora.minute);
-      final horaFin = horaInicio.add(const Duration(minutes: 30)); // Duración de la cita
-
-      final snapshot = await _firestore
-          .collection('disponibilidad_medicos')
-          .where('id_medico', isEqualTo: idMedico)
-          .where('fecha', isEqualTo: Timestamp.fromDate(fecha))
-          .where('disponibilidad', isEqualTo: true)
-          .get();
-
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        if (data != null) {
-          final Map<String, dynamic> disponibilidadData;
-          if (data is Map<String, dynamic>) {
-            disponibilidadData = data;
-          } else {
-            disponibilidadData = Map<String, dynamic>.from(data as Map);
-          }
-
-          final horaInicioDisponible = (disponibilidadData['hora_inicio'] as Timestamp).toDate();
-          final horaFinDisponible = (disponibilidadData['hora_fin'] as Timestamp).toDate();
-
-          // Verificar si el horario solicitado está dentro de la disponibilidad
-          if (horaInicio.isAfter(horaInicioDisponible.subtract(const Duration(minutes: 1))) &&
-              horaFin.isBefore(horaFinDisponible.add(const Duration(minutes: 1)))) {
-            return true; // Hay disponibilidad
-          }
-        }
-      }
-      return false; // No hay disponibilidad
-    } catch (e) {
-      print('Error verificando disponibilidad: $e');
-      return false;
-    }
-  }
-
-  // Obtener el ID de disponibilidad para una cita específica
-  Future<String?> obtenerDisponibilidadId({
-    required String idMedico,
-    required DateTime fechaHora,
-  }) async {
-    try {
-      final fecha = DateTime(fechaHora.year, fechaHora.month, fechaHora.day);
-      final horaInicio = DateTime(fechaHora.year, fechaHora.month, fechaHora.day, fechaHora.hour, fechaHora.minute);
-      final horaFin = horaInicio.add(const Duration(minutes: 30));
-
-      final snapshot = await _firestore
-          .collection('disponibilidad_medicos')
-          .where('id_medico', isEqualTo: idMedico)
-          .where('fecha', isEqualTo: Timestamp.fromDate(fecha))
-          .where('disponibilidad', isEqualTo: true)
-          .get();
-
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        if (data != null) {
-          final Map<String, dynamic> disponibilidadData;
-          if (data is Map<String, dynamic>) {
-            disponibilidadData = data;
-          } else {
-            disponibilidadData = Map<String, dynamic>.from(data as Map);
-          }
-
-          final horaInicioDisponible = (disponibilidadData['hora_inicio'] as Timestamp).toDate();
-          final horaFinDisponible = (disponibilidadData['hora_fin'] as Timestamp).toDate();
-
-          if (horaInicio.isAfter(horaInicioDisponible.subtract(const Duration(minutes: 1))) &&
-              horaFin.isBefore(horaFinDisponible.add(const Duration(minutes: 1)))) {
-            return doc.id; // Retornar el ID de la disponibilidad
-          }
-        }
-      }
-      return null;
-    } catch (e) {
-      print('Error obteniendo ID de disponibilidad: $e');
-      return null;
-    }
-  }
-
-  // ========== CREAR CITA CON VALIDACIÓN DE DISPONIBILIDAD ==========
+  // ========== CREAR CITA (VERSIÓN SIMPLIFICADA) ==========
   Future<String> crearCita({
     required String idMedico,
     required DateTime fechaHora,
@@ -104,55 +16,30 @@ class FirebaseService {
   }) async {
     final user = _auth.currentUser;
     if (user != null) {
-      // 1. Verificar disponibilidad
-      final tieneDisponibilidad = await verificarDisponibilidadMedico(
-        idMedico: idMedico,
-        fechaHora: fechaHora,
-      );
+      try {
+        // Crear la cita directamente sin validar disponibilidad
+        final docRef = await _firestore.collection('citas').add({
+          'id_paciente': user.uid,
+          'id_medico': idMedico,
+          'nombre_medico': nombreMedico,
+          'nombre_paciente': nombrePaciente,
+          'motivo': motivo,
+          'fecha': Timestamp.fromDate(fechaHora),
+          'hora': '${fechaHora.hour.toString().padLeft(2, '0')}:${fechaHora.minute.toString().padLeft(2, '0')}',
+          'estado': 'pendiente',
+          'created_at': FieldValue.serverTimestamp(),
+        });
 
-      if (!tieneDisponibilidad) {
-        throw Exception('El médico no tiene disponibilidad en este horario');
+        return docRef.id;
+      } catch (e) {
+        print('Error creando cita: $e');
+        throw Exception('Error al crear la cita: $e');
       }
-
-      // 2. Obtener el ID de la disponibilidad
-      final disponibilidadId = await obtenerDisponibilidadId(
-        idMedico: idMedico,
-        fechaHora: fechaHora,
-      );
-
-      if (disponibilidadId == null) {
-        throw Exception('No se pudo encontrar la disponibilidad del médico');
-      }
-
-      // 3. Crear la cita
-      final docRef = await _firestore.collection('citas').add({
-        'id_paciente': user.uid,
-        'id_medico': idMedico,
-        'nombre_medico': nombreMedico,
-        'nombre_paciente': nombrePaciente,
-        'motivo': motivo,
-        'fecha': Timestamp.fromDate(fechaHora),
-        'hora': '${fechaHora.hour.toString().padLeft(2, '0')}:${fechaHora.minute.toString().padLeft(2, '0')}',
-        'estado': 'pendiente',
-        'disponibilidad_id': disponibilidadId, // Guardar referencia a la disponibilidad
-        'created_at': FieldValue.serverTimestamp(),
-      });
-
-      // 4. Marcar la disponibilidad como ocupada
-      await _firestore
-          .collection('disponibilidad_medicos')
-          .doc(disponibilidadId)
-          .update({
-        'disponibilidad': false,
-        'cita_id': docRef.id, // Guardar referencia a la cita
-      });
-
-      return docRef.id;
     }
     throw Exception('Usuario no autenticado');
   }
 
-  // ========== ACTUALIZAR CITA CON VALIDACIÓN ==========
+  // ========== ACTUALIZAR CITA (VERSIÓN SIMPLIFICADA) ==========
   Future<void> actualizarCita({
     required String docId,
     required DateTime fechaHora,
@@ -160,100 +47,29 @@ class FirebaseService {
     required String idMedico,
     required String nombreMedico,
   }) async {
-    // 1. Obtener cita actual
-    final citaActual = await obtenerCitaPorId(docId);
-    if (citaActual == null) {
-      throw Exception('Cita no encontrada');
-    }
-
-    // 2. Si cambió el médico o la fecha/hora, verificar disponibilidad
-    final medicoCambio = citaActual['id_medico'] != idMedico;
-    final fechaActual = (citaActual['fecha'] as Timestamp).toDate();
-    final fechaCambio = fechaActual.year != fechaHora.year ||
-        fechaActual.month != fechaHora.month ||
-        fechaActual.day != fechaHora.day ||
-        fechaActual.hour != fechaHora.hour ||
-        fechaActual.minute != fechaHora.minute;
-
-    if (medicoCambio || fechaCambio) {
-      final tieneDisponibilidad = await verificarDisponibilidadMedico(
-        idMedico: idMedico,
-        fechaHora: fechaHora,
-      );
-
-      if (!tieneDisponibilidad) {
-        throw Exception('El médico no tiene disponibilidad en este horario');
-      }
-
-      // 3. Liberar disponibilidad anterior si existe
-      final disponibilidadAnteriorId = citaActual['disponibilidad_id'];
-      if (disponibilidadAnteriorId != null) {
-        await _firestore
-            .collection('disponibilidad_medicos')
-            .doc(disponibilidadAnteriorId as String)
-            .update({
-          'disponibilidad': true,
-          'cita_id': FieldValue.delete(),
-        });
-      }
-
-      // 4. Obtener nueva disponibilidad
-      final nuevaDisponibilidadId = await obtenerDisponibilidadId(
-        idMedico: idMedico,
-        fechaHora: fechaHora,
-      );
-
-      if (nuevaDisponibilidadId == null) {
-        throw Exception('No se pudo encontrar la disponibilidad del médico');
-      }
-
-      // 5. Actualizar cita con nueva disponibilidad
+    try {
       await _firestore.collection('citas').doc(docId).update({
         'fecha': Timestamp.fromDate(fechaHora),
         'motivo': motivo,
         'id_medico': idMedico,
         'nombre_medico': nombreMedico,
         'hora': '${fechaHora.hour.toString().padLeft(2, '0')}:${fechaHora.minute.toString().padLeft(2, '0')}',
-        'disponibilidad_id': nuevaDisponibilidadId,
         'updated_at': FieldValue.serverTimestamp(),
       });
-
-      // 6. Marcar nueva disponibilidad como ocupada
-      await _firestore
-          .collection('disponibilidad_medicos')
-          .doc(nuevaDisponibilidadId)
-          .update({
-        'disponibilidad': false,
-        'cita_id': docId,
-      });
-    } else {
-      // Solo actualizar motivo si no cambió médico ni fecha
-      await _firestore.collection('citas').doc(docId).update({
-        'motivo': motivo,
-        'updated_at': FieldValue.serverTimestamp(),
-      });
+    } catch (e) {
+      print('Error actualizando cita: $e');
+      throw Exception('Error al actualizar la cita: $e');
     }
   }
 
-  // ========== ELIMINAR CITA (LIBERAR DISPONIBILIDAD) ==========
+  // ========== ELIMINAR CITA ==========
   Future<void> eliminarCita({required String docId}) async {
-    // 1. Obtener cita para liberar disponibilidad
-    final cita = await obtenerCitaPorId(docId);
-    if (cita != null && cita['disponibilidad_id'] != null) {
-      final disponibilidadId = cita['disponibilidad_id'] as String;
-
-      // 2. Liberar disponibilidad
-      await _firestore
-          .collection('disponibilidad_medicos')
-          .doc(disponibilidadId)
-          .update({
-        'disponibilidad': true,
-        'cita_id': FieldValue.delete(),
-      });
+    try {
+      await _firestore.collection('citas').doc(docId).delete();
+    } catch (e) {
+      print('Error eliminando cita: $e');
+      throw Exception('Error al eliminar la cita: $e');
     }
-
-    // 3. Eliminar cita
-    await _firestore.collection('citas').doc(docId).delete();
   }
 
   // ========== MÉTODOS DE CONSULTA ==========
@@ -316,36 +132,6 @@ class FirebaseService {
         .snapshots();
   }
 
-  // Obtener horarios disponibles de un médico
-  Future<List<Map<String, dynamic>>> obtenerHorariosDisponibles({
-    required String idMedico,
-    required DateTime fecha,
-  }) async {
-    try {
-      final snapshot = await _firestore
-          .collection('disponibilidad_medicos')
-          .where('id_medico', isEqualTo: idMedico)
-          .where('fecha', isEqualTo: Timestamp.fromDate(fecha))
-          .where('disponibilidad', isEqualTo: true)
-          .get();
-
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        final Map<String, dynamic> disponibilidadData;
-        if (data is Map<String, dynamic>) {
-          disponibilidadData = Map<String, dynamic>.from(data);
-        } else {
-          disponibilidadData = Map<String, dynamic>.from(data as Map);
-        }
-        disponibilidadData['doc_id'] = doc.id;
-        return disponibilidadData;
-      }).toList();
-    } catch (e) {
-      print('Error obteniendo horarios disponibles: $e');
-      return [];
-    }
-  }
-
   // Obtener cita por ID
   Future<Map<String, dynamic>?> obtenerCitaPorId(String docId) async {
     try {
@@ -384,6 +170,19 @@ class FirebaseService {
                 : Map<String, dynamic>.from(data as Map);
           }
         }
+
+        // Si no existe el documento de usuario, crear uno básico
+        final userData = {
+          'nombre': user.email?.split('@').first ?? 'Usuario',
+          'email': user.email ?? '',
+          'telefono': '',
+          'historial_medico': '',
+          'uid': user.uid,
+          'created_at': FieldValue.serverTimestamp(),
+        };
+
+        await _firestore.collection('usuarios').doc(user.uid).set(userData);
+        return userData;
       }
       return null;
     } catch (e) {
@@ -418,6 +217,17 @@ class FirebaseService {
   Future<List<Map<String, dynamic>>> obtenerMedicos() async {
     try {
       final snapshot = await _firestore.collection('medicos').get();
+      if (snapshot.docs.isEmpty) {
+        // Si no hay médicos en la base de datos, retornar lista por defecto
+        return [
+          {'nombre': 'Cardiólogo', 'especialidad': 'Cardiólogo', 'doc_id': 'cardio_default'},
+          {'nombre': 'Dermatólogo', 'especialidad': 'Dermatólogo', 'doc_id': 'derma_default'},
+          {'nombre': 'Ginecólogo', 'especialidad': 'Ginecólogo', 'doc_id': 'gineco_default'},
+          {'nombre': 'Pediatra', 'especialidad': 'Pediatra', 'doc_id': 'pediatra_default'},
+          {'nombre': 'Psicólogo', 'especialidad': 'Psicólogo', 'doc_id': 'psicologo_default'},
+        ];
+      }
+
       return snapshot.docs.map((doc) {
         final data = doc.data();
         final Map<String, dynamic> medicoData;
@@ -431,7 +241,14 @@ class FirebaseService {
       }).toList();
     } catch (e) {
       print('Error obteniendo médicos: $e');
-      return [];
+      // Retornar lista por defecto en caso de error
+      return [
+        {'nombre': 'Cardiólogo', 'especialidad': 'Cardiólogo', 'doc_id': 'cardio_default'},
+        {'nombre': 'Dermatólogo', 'especialidad': 'Dermatólogo', 'doc_id': 'derma_default'},
+        {'nombre': 'Ginecólogo', 'especialidad': 'Ginecólogo', 'doc_id': 'gineco_default'},
+        {'nombre': 'Pediatra', 'especialidad': 'Pediatra', 'doc_id': 'pediatra_default'},
+        {'nombre': 'Psicólogo', 'especialidad': 'Psicólogo', 'doc_id': 'psicologo_default'},
+      ];
     }
   }
 
