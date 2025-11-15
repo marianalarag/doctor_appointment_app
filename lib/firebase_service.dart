@@ -1,4 +1,4 @@
-// firebase_service.dart - VERSIÓN SIMPLIFICADA Y FUNCIONAL
+// firebase_service.dart - VERSIÓN COMPLETA CON MÉTODOS PARA MÉDICOS
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -177,6 +177,7 @@ class FirebaseService {
           'email': user.email ?? '',
           'telefono': '',
           'historial_medico': '',
+          'role': 'patient', // Rol por defecto
           'uid': user.uid,
           'created_at': FieldValue.serverTimestamp(),
         };
@@ -199,6 +200,7 @@ class FirebaseService {
     required String email,
     String telefono = '',
     String historialMedico = '',
+    String role = 'patient',
   }) async {
     final user = _auth.currentUser;
     if (user != null) {
@@ -207,6 +209,7 @@ class FirebaseService {
         'email': email,
         'telefono': telefono,
         'historial_medico': historialMedico,
+        'role': role,
         'uid': user.uid,
         'created_at': FieldValue.serverTimestamp(),
       });
@@ -299,6 +302,290 @@ class FirebaseService {
     } catch (e) {
       print('Error obteniendo citas por fecha: $e');
       return [];
+    }
+  }
+
+  // ========== MÉTODOS ESPECÍFICOS PARA MÉDICOS ==========
+
+  // Obtener citas del médico con información del paciente
+  Stream<List<Map<String, dynamic>>> obtenerCitasMedicoConPacientes(String doctorId) {
+    return _firestore
+        .collection('citas')
+        .where('id_medico', isEqualTo: doctorId)
+        .orderBy('fecha', descending: false)
+        .snapshots()
+        .asyncMap((snapshot) async {
+      final citasConPacientes = <Map<String, dynamic>>[];
+
+      for (final doc in snapshot.docs) {
+        final citaData = doc.data() as Map<String, dynamic>;
+        final pacienteId = citaData['id_paciente'];
+
+        // Obtener información del paciente
+        final pacienteDoc = await _firestore.collection('usuarios').doc(pacienteId).get();
+        final pacienteData = pacienteDoc.data();
+
+        final citaCompleta = {
+          ...citaData,
+          'doc_id': doc.id,
+          'paciente_nombre': pacienteData?['nombre'] ?? 'Paciente',
+          'paciente_telefono': pacienteData?['telefono'] ?? '',
+          'paciente_email': pacienteData?['email'] ?? '',
+        };
+
+        citasConPacientes.add(citaCompleta);
+      }
+
+      return citasConPacientes;
+    });
+  }
+
+  // Obtener pacientes únicos del médico
+  Stream<List<Map<String, dynamic>>> obtenerPacientesDelMedico(String doctorId) {
+    return _firestore
+        .collection('citas')
+        .where('id_medico', isEqualTo: doctorId)
+        .snapshots()
+        .asyncMap((snapshot) async {
+      final pacientesMap = <String, Map<String, dynamic>>{};
+      final now = DateTime.now();
+
+      for (final doc in snapshot.docs) {
+        final citaData = doc.data() as Map<String, dynamic>;
+        final pacienteId = citaData['id_paciente'];
+
+        if (!pacientesMap.containsKey(pacienteId)) {
+          // Obtener información completa del paciente
+          final pacienteDoc = await _firestore.collection('usuarios').doc(pacienteId).get();
+          final pacienteData = pacienteDoc.data();
+
+          if (pacienteData != null) {
+            // Contar citas del paciente
+            final citasPaciente = snapshot.docs
+                .where((d) => (d.data() as Map<String, dynamic>)['id_paciente'] == pacienteId)
+                .length;
+
+            // Contar citas pendientes
+            final citasPendientes = snapshot.docs
+                .where((d) {
+              final data = d.data() as Map<String, dynamic>;
+              return data['id_paciente'] == pacienteId &&
+                  data['estado'] == 'pendiente' &&
+                  (data['fecha'] as Timestamp).toDate().isAfter(now);
+            })
+                .length;
+
+            pacientesMap[pacienteId] = {
+              ...pacienteData,
+              'total_citas': citasPaciente,
+              'citas_pendientes': citasPendientes,
+              'ultima_cita': _obtenerUltimaCita(snapshot.docs, pacienteId),
+            };
+          }
+        }
+      }
+
+      return pacientesMap.values.toList();
+    });
+  }
+
+  // Método auxiliar para obtener última cita
+  String _obtenerUltimaCita(List<QueryDocumentSnapshot> docs, String pacienteId) {
+    final citasPaciente = docs
+        .where((doc) => (doc.data() as Map<String, dynamic>)['id_paciente'] == pacienteId)
+        .toList();
+
+    if (citasPaciente.isEmpty) return 'Nunca';
+
+    citasPaciente.sort((a, b) {
+      final fechaA = (a.data() as Map<String, dynamic>)['fecha'] as Timestamp;
+      final fechaB = (b.data() as Map<String, dynamic>)['fecha'] as Timestamp;
+      return fechaB.compareTo(fechaA);
+    });
+
+    final ultimaCita = (citasPaciente.first.data() as Map<String, dynamic>)['fecha'] as Timestamp;
+    return _formatearFecha(ultimaCita.toDate());
+  }
+
+  String _formatearFecha(DateTime fecha) {
+    final meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    return '${fecha.day} ${meses[fecha.month - 1]} ${fecha.year}';
+  }
+
+  // Cambiar estado de cita como médico
+  Future<void> cambiarEstadoCitaMedico({
+    required String docId,
+    required String estado,
+    String? observaciones,
+  }) async {
+    await _firestore.collection('citas').doc(docId).update({
+      'estado': estado,
+      'observaciones_medico': observaciones ?? '',
+      'updated_at': FieldValue.serverTimestamp(),
+    });
+  }
+
+  // Obtener estadísticas rápidas para el médico
+  Stream<Map<String, dynamic>> obtenerEstadisticasMedico(String doctorId) {
+    return _firestore
+        .collection('citas')
+        .where('id_medico', isEqualTo: doctorId)
+        .snapshots()
+        .asyncMap((snapshot) async {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+
+      final citas = snapshot.docs;
+
+      // Estadísticas básicas
+      final totalCitas = citas.length;
+      final citasHoy = citas.where((doc) {
+        final fecha = (doc.data() as Map<String, dynamic>)['fecha'] as Timestamp;
+        final fechaCita = DateTime(fecha.toDate().year, fecha.toDate().month, fecha.toDate().day);
+        return fechaCita == today;
+      }).length;
+
+      final citasPendientes = citas.where((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        return data['estado'] == 'pendiente' &&
+            (data['fecha'] as Timestamp).toDate().isAfter(now);
+      }).length;
+
+      // Pacientes únicos
+      final pacientesUnicos = citas
+          .map((doc) => (doc.data() as Map<String, dynamic>)['id_paciente'])
+          .toSet()
+          .length;
+
+      return {
+        'totalCitas': totalCitas,
+        'citasHoy': citasHoy,
+        'citasPendientes': citasPendientes,
+        'totalPacientes': pacientesUnicos,
+      };
+    });
+  }
+
+  // ========== MÉTODOS PARA DASHBOARD ==========
+
+  // Obtener estadísticas para el dashboard médico
+  Stream<Map<String, int>> obtenerEstadisticasDashboard(String doctorId) {
+    return _firestore
+        .collection('citas')
+        .where('id_medico', isEqualTo: doctorId)
+        .snapshots()
+        .map((snapshot) {
+      final now = DateTime.now();
+      final appointments = snapshot.docs;
+
+      final totalAppointments = appointments.length;
+      final pendingAppointments = appointments
+          .where((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        final status = data['estado'] ?? 'pendiente';
+        final fecha = data['fecha'];
+        if (fecha is Timestamp) {
+          final appointmentDate = fecha.toDate();
+          return status == 'pendiente' && appointmentDate.isAfter(now);
+        }
+        return false;
+      })
+          .length;
+
+      final uniquePatients = appointments
+          .map((doc) => (doc.data() as Map<String, dynamic>)['id_paciente'])
+          .toSet()
+          .length;
+
+      final today = DateTime(now.year, now.month, now.day);
+      final todayAppointments = appointments
+          .where((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        final fecha = data['fecha'];
+        if (fecha is Timestamp) {
+          final appointmentDate = fecha.toDate();
+          final appointmentDay = DateTime(
+              appointmentDate.year,
+              appointmentDate.month,
+              appointmentDate.day
+          );
+          return appointmentDay == today;
+        }
+        return false;
+      })
+          .length;
+
+      return {
+        'totalCitas': totalAppointments,
+        'citasPendientes': pendingAppointments,
+        'totalPacientes': uniquePatients,
+        'citasHoy': todayAppointments,
+      };
+    });
+  }
+
+  // Actualizar rol de usuario
+  Future<void> actualizarRolUsuario(String role) async {
+    final user = _auth.currentUser;
+    if (user != null) {
+      await _firestore
+          .collection('usuarios')
+          .doc(user.uid)
+          .update({'role': role});
+    }
+  }
+
+  // Obtener rol del usuario actual
+  Future<String> obtenerRolUsuarioActual() async {
+    final user = _auth.currentUser;
+    if (user != null) {
+      final doc = await _firestore.collection('usuarios').doc(user.uid).get();
+      if (doc.exists) {
+        return doc.data()?['role'] ?? 'patient';
+      }
+    }
+    return 'patient';
+  }
+
+  // Obtener citas recientes para el dashboard
+  Stream<List<Map<String, dynamic>>> obtenerCitasRecientesMedico(String doctorId, {int limit = 5}) {
+    return _firestore
+        .collection('citas')
+        .where('id_medico', isEqualTo: doctorId)
+        .orderBy('fecha', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        final Map<String, dynamic> citaData;
+        if (data is Map<String, dynamic>) {
+          citaData = Map<String, dynamic>.from(data);
+        } else {
+          citaData = Map<String, dynamic>.from(data as Map);
+        }
+        citaData['doc_id'] = doc.id;
+        return citaData;
+      }).toList();
+    });
+  }
+
+  // Obtener información del médico para el dashboard
+  Future<Map<String, dynamic>?> obtenerInfoMedico(String doctorId) async {
+    try {
+      final doc = await _firestore.collection('usuarios').doc(doctorId).get();
+      if (doc.exists) {
+        final data = doc.data();
+        if (data != null) {
+          return data is Map<String, dynamic>
+              ? Map<String, dynamic>.from(data)
+              : Map<String, dynamic>.from(data as Map);
+        }
+      }
+      return null;
+    } catch (e) {
+      print('Error obteniendo info médico: $e');
+      return null;
     }
   }
 }

@@ -13,6 +13,54 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   final user = FirebaseAuth.instance.currentUser;
+  String _selectedRole = 'patient';
+  bool _isLoadingRole = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserRole();
+  }
+
+  Future<void> _loadUserRole() async {
+    if (user != null) {
+      final doc = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user!.uid)
+          .get();
+
+      if (doc.exists && doc.data()?['role'] != null) {
+        setState(() {
+          _selectedRole = doc.data()!['role'];
+          _isLoadingRole = false;
+        });
+      } else {
+        setState(() {
+          _isLoadingRole = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _updateRole(String newRole) async {
+    if (user == null) return;
+
+    setState(() {
+      _selectedRole = newRole;
+    });
+
+    await FirebaseFirestore.instance
+        .collection('usuarios')
+        .doc(user!.uid)
+        .update({'role': newRole});
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Rol actualizado a: ${newRole == 'doctor' ? 'Médico' : 'Paciente'}'),
+        backgroundColor: Colors.teal,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -142,6 +190,171 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                 ),
                 const SizedBox(height: 24),
+
+                // Role Information Card
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 15,
+                        offset: const Offset(0, 5),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Información de Rol",
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.teal,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      StreamBuilder<DocumentSnapshot>(
+                        stream: FirebaseFirestore.instance
+                            .collection('usuarios')
+                            .doc(user!.uid)
+                            .snapshots(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) {
+                            return const Center(child: CircularProgressIndicator(color: Colors.teal));
+                          }
+
+                          final userData = snapshot.data!.data() as Map<String, dynamic>?;
+                          final role = userData?['role'] ?? 'patient';
+
+                          return Row(
+                            children: [
+                              Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: role == 'doctor' ? Colors.teal.withOpacity(0.1) : Colors.blue.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  role == 'doctor' ? Icons.medical_services : Icons.person,
+                                  color: role == 'doctor' ? Colors.teal : Colors.blue,
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Tipo de Usuario',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.grey.shade600,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      role == 'doctor' ? 'Médico' : 'Paciente',
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      role == 'doctor'
+                                          ? 'Acceso completo al panel médico y gestión de pacientes'
+                                          : 'Puede agendar citas y ver su historial médico',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Role Selection Card
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 15,
+                        offset: const Offset(0, 5),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Configuración de Rol",
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.teal,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      _isLoadingRole
+                          ? const Center(child: CircularProgressIndicator(color: Colors.teal))
+                          : DropdownButtonFormField<String>(
+                        value: _selectedRole,
+                        decoration: const InputDecoration(
+                          labelText: 'Selecciona tu rol',
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'patient',
+                            child: Text('Paciente'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'doctor',
+                            child: Text('Médico'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) {
+                            _updateRole(value);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        _selectedRole == 'doctor'
+                            ? 'Como médico tendrás acceso al Dashboard con estadísticas de tus citas'
+                            : 'Como paciente podrás agendar citas y ver tu historial',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
                 // Information Card
                 Container(
                   padding: const EdgeInsets.all(24),

@@ -14,6 +14,7 @@ import 'settings_page.dart';
 import 'privacy_page.dart';
 import 'about_page.dart';
 import 'profile_form_page.dart';
+import 'dashboard_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,6 +60,7 @@ class MyApp extends StatelessWidget {
         '/settings': (context) => const SettingsPage(),
         '/privacy': (context) => const PrivacyPage(),
         '/about': (context) => const AboutPage(),
+        '/dashboard': (context) => const DashboardPage(),
       },
 
       // Ruta con parámetros se maneja mediante onGenerateRoute

@@ -7,6 +7,7 @@ import 'settings_page.dart';
 import 'firebase_service.dart';
 import 'calendario_page.dart';
 import 'citas_page.dart';
+import 'doctor_home_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -20,8 +21,9 @@ class _HomePageState extends State<HomePage> {
   final user = FirebaseAuth.instance.currentUser;
   int _currentIndex = 0;
 
-  // Key para el RefreshIndicator
-  final GlobalKey<RefreshIndicatorState> _refreshKey = GlobalKey<RefreshIndicatorState>();
+  String? userName;
+  String? userEmail;
+  bool _isLoading = true;
 
   final List<String> especialistas = [
     'Cardiólogo',
@@ -37,7 +39,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    // Inicializar las páginas
+    _loadUserData();
     _pages = [
       _buildHomeContent(),
       const MessagesPage(),
@@ -46,21 +48,53 @@ class _HomePageState extends State<HomePage> {
     ];
   }
 
+  Future<void> _loadUserData() async {
+    if (user != null) {
+      try {
+        final userData = await _service.obtenerUsuarioActual();
+
+        setState(() {
+          userName = userData?['nombre'] ?? user?.email?.split('@').first ?? 'Usuario';
+          userEmail = user?.email ?? '';
+          _isLoading = false;
+        });
+      } catch (e) {
+        setState(() {
+          userName = user?.email?.split('@').first ?? 'Usuario';
+          userEmail = user?.email ?? '';
+          _isLoading = false;
+        });
+      }
+    } else {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
   // ============================================================
-  // GESTO 1: Recarga Manual (Adaptado para Chrome)
+  // RECARGA MANUAL
   // ============================================================
   Future<void> _recargarDatos() async {
+    setState(() {
+      _isLoading = true;
+    });
+
     await Future.delayed(const Duration(milliseconds: 800));
-    setState(() {});
+    await _loadUserData();
 
     if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Row(
             children: [
-              Icon(Icons.check_circle, color: Colors.white),
+              Icon(Icons.refresh, color: Colors.white),
               SizedBox(width: 8),
-              Text('✓ Datos actualizados correctamente'),
+              Text('Datos actualizados correctamente'),
             ],
           ),
           backgroundColor: Colors.green,
@@ -72,34 +106,47 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: _currentIndex == 0 ? _buildAppBar() : null,
-      body: _pages[_currentIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        selectedItemColor: Colors.teal,
-        unselectedItemColor: Colors.grey,
-        onTap: (index) => setState(() => _currentIndex = index),
-        type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: "Inicio",
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user!.uid)
+          .snapshots(),
+      builder: (context, userSnapshot) {
+        if (!userSnapshot.hasData || _isLoading) {
+          return const Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(color: Colors.teal),
+                  SizedBox(height: 20),
+                  Text('Cargando tu perfil...'),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final userData = userSnapshot.data!.data() as Map<String, dynamic>?;
+        final role = userData?['role'] ?? 'patient';
+
+        // Si es médico, redirigir al DoctorHomePage
+        if (role == 'doctor') {
+          return const DoctorHomePage();
+        }
+
+        // Si es paciente, mostrar la home page normal
+        return Scaffold(
+          appBar: _currentIndex == 0 ? _buildAppBar() : null,
+          body: RefreshIndicator(
+            onRefresh: _recargarDatos,
+            color: Colors.teal,
+            backgroundColor: Colors.white,
+            child: _pages[_currentIndex],
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.message),
-            label: "Mensajes",
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.calendar_today),
-            label: "Calendario",
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.settings),
-            label: "Configuración",
-          ),
-        ],
-      ),
+          bottomNavigationBar: _buildBottomNavigationBar(),
+        );
+      },
     );
   }
 
@@ -108,8 +155,13 @@ class _HomePageState extends State<HomePage> {
       title: const Text('Sistema de Citas Médicas'),
       backgroundColor: Colors.teal,
       foregroundColor: Colors.white,
+      elevation: 0,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          bottom: Radius.circular(20),
+        ),
+      ),
       actions: [
-        // ⭐ GESTO 1: Botón de recarga manual (reemplaza pull-to-refresh)
         IconButton(
           icon: const Icon(Icons.refresh),
           tooltip: 'Actualizar datos',
@@ -136,47 +188,43 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  BottomNavigationBar _buildBottomNavigationBar() {
+    return BottomNavigationBar(
+      currentIndex: _currentIndex,
+      selectedItemColor: Colors.teal,
+      unselectedItemColor: Colors.grey,
+      backgroundColor: Colors.white,
+      elevation: 8,
+      onTap: (index) => setState(() => _currentIndex = index),
+      type: BottomNavigationBarType.fixed,
+      items: const [
+        BottomNavigationBarItem(
+          icon: Icon(Icons.home),
+          label: "Inicio",
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.message),
+          label: "Mensajes",
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.calendar_today),
+          label: "Calendario",
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.settings),
+          label: "Configuración",
+        ),
+      ],
+    );
+  }
+
   Widget _buildHomeContent() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Indicador de recarga manual
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.teal.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.teal.withOpacity(0.3)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.refresh, size: 16, color: Colors.teal),
-                const SizedBox(width: 8),
-                const Text(
-                  'Usa el botón ',
-                  style: TextStyle(fontSize: 12, color: Colors.teal),
-                ),
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: Colors.teal,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Icon(Icons.refresh, size: 12, color: Colors.white),
-                ),
-                const Text(
-                  ' para actualizar',
-                  style: TextStyle(fontSize: 12, color: Colors.teal),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          _buildUserHeader(),
+          _buildWelcomeCard(),
           const SizedBox(height: 20),
           _buildActionButtons(),
           const SizedBox(height: 30),
@@ -184,341 +232,301 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 30),
           _buildTipsRapidos(),
           const SizedBox(height: 30),
-          _buildProximasCitas(),
+          _buildProximasCitasCompact(),
+          const SizedBox(height: 40),
         ],
       ),
     );
   }
 
-  Widget _buildUserHeader() {
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(user!.uid)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Row(
+  Widget _buildWelcomeCard() {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Colors.teal.shade50, Colors.teal.shade100],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.teal.withOpacity(0.3)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Stack(
             children: [
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: Colors.teal.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.teal, width: 2),
+                ),
+                child: const Icon(
+                  Icons.person,
+                  color: Colors.teal,
+                  size: 40,
+                ),
               ),
-              SizedBox(width: 8),
-              Text('Cargando...'),
-            ],
-          );
-        }
-
-        String nombre = 'Usuario';
-        String? telefono;
-
-        if (snapshot.hasData && snapshot.data!.exists) {
-          final data = snapshot.data!.data() as Map<String, dynamic>;
-          nombre = data['nombre'] ?? user?.email ?? 'Usuario';
-          telefono = data['telefono'];
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Text(
-                    "¡Hola, $nombre!",
-                    style: const TextStyle(
-                      fontSize: 22,
+              Positioned(
+                bottom: 0,
+                right: 0,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.blue,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    'PACIENTE',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
                       fontWeight: FontWeight.bold,
-                      color: Colors.teal,
                     ),
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.sync, size: 12, color: Colors.green),
-                      SizedBox(width: 4),
-                      Text(
-                        'En vivo',
-                        style: TextStyle(fontSize: 10, color: Colors.green, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            if (telefono != null && telefono.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4.0),
-                child: Text(
-                  "Tel: $telefono",
-                  style: const TextStyle(color: Colors.grey, fontSize: 14),
-                ),
               ),
-          ],
-        );
-      },
+            ],
+          ),
+          const SizedBox(height: 20),
+          Text(
+            "¡Hola, $userName!",
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              color: Colors.teal,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            userEmail ?? '',
+            style: const TextStyle(
+              fontSize: 16,
+              color: Colors.grey,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Sistema de agendamiento de citas médicas',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey,
+              fontStyle: FontStyle.italic,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildActionButtons() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: ElevatedButton.icon(
-            icon: const Icon(Icons.add_circle),
-            label: const Text("Agendar Cita"),
-            onPressed: () => _abrirFormularioCita(),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.teal,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
+        const Text(
+          "Acciones Rápidas",
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.teal,
           ),
         ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: ElevatedButton.icon(
-            icon: const Icon(Icons.medical_services),
-            label: const Text("Médicos"),
-            onPressed: _mostrarListaMedicos,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _buildActionCard(
+                icon: Icons.add_circle,
+                title: 'Agendar Cita',
+                subtitle: 'Nueva consulta',
+                color: Colors.teal,
+                onTap: _abrirFormularioCita,
               ),
             ),
-          ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildActionCard(
+                icon: Icons.medical_services,
+                title: 'Médicos',
+                subtitle: 'Especialistas',
+                color: Colors.blue,
+                onTap: _mostrarListaMedicos,
+              ),
+            ),
+          ],
         ),
       ],
     );
   }
 
+  Widget _buildActionCard({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Card(
+      elevation: 3,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          height: 90,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 18),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 1),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 9,
+                  color: Colors.grey,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // MÉTODO _buildEspecialistas QUE FALTABA
   Widget _buildEspecialistas() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
           "Especialistas",
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.teal,
+          ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 12),
         SizedBox(
-          height: 150,
+          height: 100,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             itemCount: especialistas.length,
             itemBuilder: (context, index) {
-              // ⭐ GESTO 2 y 3: Click simple + botón de info (reemplazan tap y long press)
-              return Card(
-                margin: const EdgeInsets.only(right: 12),
-                elevation: 3,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: InkWell(
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Row(
-                          children: [
-                            Icon(_getIconoEspecialidad(especialistas[index]), color: Colors.white, size: 20),
-                            const SizedBox(width: 8),
-                            Text('Seleccionaste: ${especialistas[index]}'),
-                          ],
-                        ),
-                        duration: const Duration(seconds: 2),
-                        backgroundColor: Colors.teal,
-                      ),
-                    );
-                  },
-                  borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    width: 140,
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          _getIconoEspecialidad(especialistas[index]),
-                          color: Colors.teal,
-                          size: 36,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          especialistas[index],
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.teal,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        // ⭐ GESTO 3: Botón de información (reemplaza long press)
-                        ElevatedButton(
-                          onPressed: () => _mostrarInfoEspecialista(especialistas[index]),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.teal,
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.info_outline, size: 14),
-                              SizedBox(width: 4),
-                              Text('Info', style: TextStyle(fontSize: 11)),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
+              return _buildSpecialistCard(especialistas[index]);
             },
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(top: 8.0),
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.blue.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.touch_app, size: 14, color: Colors.blue),
-                SizedBox(width: 8),
-                Text(
-                  'Click en la tarjeta para seleccionar, botón "Info" para detalles',
-                  style: TextStyle(fontSize: 11, color: Colors.blue),
-                ),
-              ],
-            ),
           ),
         ),
       ],
     );
   }
 
-  void _mostrarInfoEspecialista(String especialista) {
-    final info = {
-      'Cardiólogo': 'Especialista en enfermedades del corazón y sistema circulatorio. Trata arritmias, insuficiencia cardíaca y más.',
-      'Dermatólogo': 'Experto en salud de la piel, cabello y uñas. Diagnostica y trata acné, eczema, psoriasis y más.',
-      'Ginecólogo': 'Especialista en salud reproductiva femenina. Realiza exámenes preventivos y trata trastornos ginecológicos.',
-      'Pediatra': 'Médico especializado en la salud infantil desde el nacimiento hasta la adolescencia.',
-      'Psicólogo': 'Profesional de la salud mental y bienestar emocional. Ofrece terapia y apoyo psicológico.',
-    };
-
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.teal.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(_getIconoEspecialidad(especialista), color: Colors.teal, size: 28),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                especialista,
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              info[especialista] ?? 'Información no disponible',
-              style: const TextStyle(fontSize: 15, height: 1.5),
-            ),
-            const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.teal.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.info_outline, color: Colors.teal, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '¿Deseas agendar una cita con este especialista?',
-                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton.icon(
-            onPressed: () {
-              Navigator.pop(context);
-              _abrirFormularioCita();
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.teal,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            icon: const Icon(Icons.calendar_today, size: 18),
-            label: const Text('Agendar Cita'),
+  Widget _buildSpecialistCard(String especialista) {
+    return Container(
+      width: 90,
+      margin: const EdgeInsets.only(right: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 3,
+            offset: const Offset(0, 1),
           ),
         ],
       ),
+      child: InkWell(
+        onTap: () {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(_getIconoEspecialidad(especialista), color: Colors.white, size: 18),
+                  const SizedBox(width: 6),
+                  Text('Seleccionaste: $especialista'),
+                ],
+              ),
+              duration: const Duration(seconds: 2),
+              backgroundColor: Colors.teal,
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: Colors.teal.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  _getIconoEspecialidad(especialista),
+                  color: Colors.teal,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                especialista,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.teal,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
-  }
-
-  IconData _getIconoEspecialidad(String especialidad) {
-    switch (especialidad) {
-      case 'Cardiólogo':
-        return Icons.favorite;
-      case 'Dermatólogo':
-        return Icons.face;
-      case 'Ginecólogo':
-        return Icons.woman;
-      case 'Pediatra':
-        return Icons.child_care;
-      case 'Psicólogo':
-        return Icons.psychology;
-      default:
-        return Icons.medical_services;
-    }
   }
 
   Widget _buildTipsRapidos() {
@@ -527,9 +535,13 @@ class _HomePageState extends State<HomePage> {
       children: [
         const Text(
           "Tips de Salud",
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.teal,
+          ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 12),
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -538,43 +550,18 @@ class _HomePageState extends State<HomePage> {
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Colors.teal.withOpacity(0.3)),
           ),
-          child: const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Column(
             children: [
-              Row(
-                children: [
-                  Icon(Icons.water_drop, color: Colors.teal, size: 18),
-                  SizedBox(width: 8),
-                  Expanded(child: Text("Bebe al menos 8 vasos de agua al día", style: TextStyle(fontSize: 14))),
-                ],
-              ),
-              SizedBox(height: 10),
-              Row(
-                children: [
-                  Icon(Icons.bedtime, color: Colors.teal, size: 18),
-                  SizedBox(width: 8),
-                  Expanded(child: Text("Duerme entre 7-9 horas diarias", style: TextStyle(fontSize: 14))),
-                ],
-              ),
-              SizedBox(height: 10),
-              Row(
-                children: [
-                  Icon(Icons.directions_walk, color: Colors.teal, size: 18),
-                  SizedBox(width: 8),
-                  Expanded(child: Text("Camina al menos 30 minutos al día", style: TextStyle(fontSize: 14))),
-                ],
-              ),
-              SizedBox(height: 10),
-              Row(
-                children: [
-                  Icon(Icons.psychology, color: Colors.teal, size: 18),
-                  SizedBox(width: 8),
-                  Expanded(child: Text("Practica meditación o mindfulness", style: TextStyle(fontSize: 14))),
-                ],
-              ),
+              _buildTipItem(Icons.water_drop, "Bebe al menos 8 vasos de agua al día"),
+              const SizedBox(height: 10),
+              _buildTipItem(Icons.bedtime, "Duerme entre 7-9 horas diarias"),
+              const SizedBox(height: 10),
+              _buildTipItem(Icons.directions_walk, "Camina al menos 30 minutos al día"),
+              const SizedBox(height: 10),
+              _buildTipItem(Icons.psychology, "Practica meditación o mindfulness"),
             ],
           ),
         ),
@@ -582,7 +569,22 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildProximasCitas() {
+  Widget _buildTipItem(IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon, color: Colors.teal, size: 18),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(fontSize: 13),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProximasCitasCompact() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -591,117 +593,74 @@ class _HomePageState extends State<HomePage> {
           children: [
             const Text(
               "Próximas Citas",
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.teal,
+              ),
             ),
-            // ⭐ Tip para botón de eliminar (reemplaza swipe)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
               decoration: BoxDecoration(
                 color: Colors.red.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(6),
                 border: Border.all(color: Colors.red.withOpacity(0.3)),
               ),
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.delete, size: 14, color: Colors.red),
-                  SizedBox(width: 4),
+                  Icon(Icons.delete, size: 10, color: Colors.red),
+                  SizedBox(width: 3),
                   Text(
-                    'Usa el menú para cancelar',
-                    style: TextStyle(fontSize: 10, color: Colors.red, fontWeight: FontWeight.bold),
+                    'Menú cancelar',
+                    style: TextStyle(fontSize: 8, color: Colors.red, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
             ),
           ],
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 12),
         StreamBuilder<List<Map<String, dynamic>>>(
           stream: _service.obtenerProximasCitasUsuario(user!.uid),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
+              return _buildLoadingCardCompact();
             }
 
             if (snapshot.hasError) {
-              return Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      const Icon(Icons.error, color: Colors.red, size: 48),
-                      const SizedBox(height: 8),
-                      Text('Error: ${snapshot.error}'),
-                      const SizedBox(height: 8),
-                      ElevatedButton(
-                        onPressed: () {
-                          setState(() {});
-                        },
-                        child: const Text('Reintentar'),
-                      ),
-                    ],
-                  ),
-                ),
-              );
+              return _buildErrorCardCompact('Error: ${snapshot.error}');
             }
 
             if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: const Padding(
-                  padding: EdgeInsets.all(24.0),
-                  child: Column(
-                    children: [
-                      Icon(Icons.calendar_today, size: 64, color: Colors.grey),
-                      SizedBox(height: 12),
-                      Text(
-                        "No tienes citas próximas",
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        "Agenda tu primera cita usando el botón 'Agendar Cita'",
-                        style: TextStyle(fontSize: 13, color: Colors.grey),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-                ),
-              );
+              return _buildEmptyCardCompact();
             }
 
             final citas = snapshot.data!;
 
             return Column(
               children: [
-                ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: citas.length > 3 ? 3 : citas.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, index) {
-                    final cita = citas[index];
-                    final fecha = (cita['fecha'] as Timestamp).toDate();
-                    final docId = cita['doc_id'] as String;
-
-                    // ⭐ GESTO 4: Botón de eliminar (reemplaza Dismissible/swipe)
-                    return _buildCitaCard(cita, fecha, docId);
-                  },
-                ),
-                if (citas.length > 3) ...[
-                  const SizedBox(height: 12),
-                  TextButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const CitasPage()),
-                      );
-                    },
-                    icon: const Icon(Icons.arrow_forward, size: 16),
-                    label: Text('Ver todas las citas (${citas.length})'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.teal,
+                ...citas.take(2).map((cita) {
+                  final fecha = (cita['fecha'] as Timestamp).toDate();
+                  final docId = cita['doc_id'] as String;
+                  return _buildCitaCardCompact(cita, fecha, docId);
+                }),
+                if (citas.length > 2) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const CitasPage()),
+                        );
+                      },
+                      icon: const Icon(Icons.arrow_forward, size: 14),
+                      label: Text('Ver todas las citas (${citas.length})'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.teal,
+                      ),
                     ),
                   ),
                 ],
@@ -713,96 +672,84 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildCitaCard(Map<String, dynamic> cita, DateTime fecha, String docId) {
+  Widget _buildCitaCardCompact(Map<String, dynamic> cita, DateTime fecha, String docId) {
     return Card(
-      elevation: 4,
+      elevation: 3,
+      margin: const EdgeInsets.only(bottom: 10),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.all(12),
         leading: Container(
-          width: 56,
-          height: 56,
+          width: 45,
+          height: 45,
           decoration: BoxDecoration(
             gradient: LinearGradient(
               colors: [Colors.teal.shade300, Colors.teal.shade600],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.teal.withOpacity(0.3),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
+            borderRadius: BorderRadius.circular(10),
           ),
           child: const Icon(
             Icons.medical_services,
             color: Colors.white,
-            size: 28,
+            size: 22,
           ),
         ),
         title: Text(
           "Dr. ${cita['id_medico']}",
           style: const TextStyle(
             fontWeight: FontWeight.bold,
-            fontSize: 16,
+            fontSize: 14,
           ),
         ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             Row(
               children: [
-                const Icon(Icons.calendar_today, size: 14, color: Colors.grey),
+                const Icon(Icons.calendar_today, size: 12, color: Colors.grey),
                 const SizedBox(width: 4),
                 Text(
                   _formatearFecha(fecha),
-                  style: const TextStyle(fontSize: 13),
+                  style: const TextStyle(fontSize: 11),
                 ),
-                const SizedBox(width: 12),
-                const Icon(Icons.access_time, size: 14, color: Colors.grey),
+                const SizedBox(width: 8),
+                const Icon(Icons.access_time, size: 12, color: Colors.grey),
                 const SizedBox(width: 4),
                 Text(
                   cita['hora'],
-                  style: const TextStyle(fontSize: 13),
+                  style: const TextStyle(fontSize: 11),
                 ),
               ],
             ),
             const SizedBox(height: 4),
-            Text(
-              "Motivo: ${cita['motivo']}",
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 6),
             Chip(
               label: Text(
                 cita['estado'] ?? 'pendiente',
-                style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold),
+                style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
               ),
               backgroundColor: _getColorEstado(cita['estado']),
               padding: EdgeInsets.zero,
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
             ),
           ],
         ),
         trailing: PopupMenuButton<String>(
           onSelected: (value) => _manejarAccionCita(value, docId, cita),
-          icon: const Icon(Icons.more_vert, color: Colors.grey),
+          icon: const Icon(Icons.more_vert, size: 18, color: Colors.grey),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           itemBuilder: (_) => const [
             PopupMenuItem(
               value: 'edit',
               child: Row(
                 children: [
-                  Icon(Icons.edit, size: 18, color: Colors.blue),
-                  SizedBox(width: 8),
+                  Icon(Icons.edit, size: 16, color: Colors.blue),
+                  SizedBox(width: 6),
                   Text('Editar'),
                 ],
               ),
@@ -811,8 +758,8 @@ class _HomePageState extends State<HomePage> {
               value: 'view',
               child: Row(
                 children: [
-                  Icon(Icons.visibility, size: 18, color: Colors.teal),
-                  SizedBox(width: 8),
+                  Icon(Icons.visibility, size: 16, color: Colors.teal),
+                  SizedBox(width: 6),
                   Text('Ver Detalles'),
                 ],
               ),
@@ -821,11 +768,78 @@ class _HomePageState extends State<HomePage> {
               value: 'delete',
               child: Row(
                 children: [
-                  Icon(Icons.delete, size: 18, color: Colors.red),
-                  SizedBox(width: 8),
-                  Text('Cancelar Cita'),
+                  Icon(Icons.delete, size: 16, color: Colors.red),
+                  SizedBox(width: 6),
+                  Text('Cancelar'),
                 ],
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingCardCompact() {
+    return const Card(
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Center(
+          child: Column(
+            children: [
+              CircularProgressIndicator(color: Colors.teal, strokeWidth: 2),
+              SizedBox(height: 12),
+              Text('Cargando citas...', style: TextStyle(fontSize: 12)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorCardCompact(String message) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            const Icon(Icons.error, color: Colors.red, size: 24),
+            const SizedBox(height: 8),
+            Text(
+              'Error al cargar',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              message.length > 50 ? '${message.substring(0, 50)}...' : message,
+              style: const TextStyle(fontSize: 10, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyCardCompact() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: const Padding(
+        padding: EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Icon(Icons.calendar_today, size: 40, color: Colors.grey),
+            SizedBox(height: 8),
+            Text(
+              "No tienes citas próximas",
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            SizedBox(height: 4),
+            Text(
+              "Usa 'Agendar Cita' para programar una",
+              style: TextStyle(fontSize: 11, color: Colors.grey),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -1112,5 +1126,106 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
     );
+  }
+
+  void _mostrarInfoEspecialista(String especialista) {
+    final info = {
+      'Cardiólogo': 'Especialista en enfermedades del corazón y sistema circulatorio. Trata arritmias, insuficiencia cardíaca y más.',
+      'Dermatólogo': 'Experto en salud de la piel, cabello y uñas. Diagnostica y trata acné, eczema, psoriasis y más.',
+      'Ginecólogo': 'Especialista en salud reproductiva femenina. Realiza exámenes preventivos y trata trastornos ginecológicos.',
+      'Pediatra': 'Médico especializado en la salud infantil desde el nacimiento hasta la adolescencia.',
+      'Psicólogo': 'Profesional de la salud mental y bienestar emocional. Ofrece terapia y apoyo psicológico.',
+    };
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.teal.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(_getIconoEspecialidad(especialista), color: Colors.teal, size: 28),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                especialista,
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              info[especialista] ?? 'Información no disponible',
+              style: const TextStyle(fontSize: 15, height: 1.5),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.teal.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.teal, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '¿Deseas agendar una cita con este especialista?',
+                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _abrirFormularioCita();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.teal,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            icon: const Icon(Icons.calendar_today, size: 18),
+            label: const Text('Agendar Cita'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _getIconoEspecialidad(String especialidad) {
+    switch (especialidad) {
+      case 'Cardiólogo':
+        return Icons.favorite;
+      case 'Dermatólogo':
+        return Icons.face;
+      case 'Ginecólogo':
+        return Icons.woman;
+      case 'Pediatra':
+        return Icons.child_care;
+      case 'Psicólogo':
+        return Icons.psychology;
+      default:
+        return Icons.medical_services;
+    }
   }
 }
