@@ -1,4 +1,3 @@
-// doctor_home_page.dart - VERSIÓN CORREGIDA Y MEJORADA
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -6,6 +5,8 @@ import 'firebase_service.dart';
 import 'profile_page.dart';
 import 'settings_page.dart';
 import 'login_page.dart';
+import 'messages_page.dart';
+import 'graphics_page.dart';
 
 class DoctorHomePage extends StatefulWidget {
   const DoctorHomePage({super.key});
@@ -29,7 +30,8 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
       _buildDoctorHomeContent(),
       _buildPacientesPage(),
       _buildCitasPage(),
-      const SettingsPage(), // Configuración en lugar del Dashboard
+      const SettingsPage(),
+      const GraphicsPage()
     ];
   }
 
@@ -74,12 +76,32 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
               ),
             ),
             const PopupMenuItem(
+              value: 'graphics',
+              child: Row(
+                children: [
+                  Icon(Icons.bar_chart, color: Colors.purple),
+                  SizedBox(width: 8),
+                  Text('Estadísticas'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
               value: 'settings',
               child: Row(
                 children: [
                   Icon(Icons.settings, color: Colors.blue),
                   SizedBox(width: 8),
                   Text('Configuración'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'test_data',
+              child: Row(
+                children: [
+                  Icon(Icons.data_usage, color: Colors.orange),
+                  SizedBox(width: 8),
+                  Text('Crear Datos Prueba'),
                 ],
               ),
             ),
@@ -125,6 +147,10 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
           icon: Icon(Icons.settings),
           label: "Configuración",
         ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.bar_chart),
+          label: "Estadísticas",
+        ),
       ],
     );
   }
@@ -137,12 +163,121 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
           MaterialPageRoute(builder: (_) => const ProfilePage()),
         );
         break;
+      case 'graphics':
+        setState(() => _currentIndex = 4);
+        break;
       case 'settings':
         setState(() => _currentIndex = 3);
+        break;
+      case 'test_data':
+        _mostrarDialogoDatosPrueba();
         break;
       case 'logout':
         _cerrarSesion();
         break;
+    }
+  }
+
+  void _mostrarDialogoDatosPrueba() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Datos de Prueba'),
+        content: const Text('¿Quieres crear datos de prueba para las gráficas?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _agregarCitasDePrueba();
+            },
+            child: const Text('Crear Datos'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _agregarCitasDePrueba() async {
+    try {
+      final user = _user;
+      if (user == null) return;
+
+      final pacientesSnapshot = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .where('role', isEqualTo: 'patient')
+          .limit(3)
+          .get();
+
+      if (pacientesSnapshot.docs.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No hay pacientes. Crea algunos pacientes primero.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      final pacientes = pacientesSnapshot.docs;
+      final ahora = DateTime.now();
+
+      for (int i = 0; i < 15; i++) {
+        final pacienteIndex = i % pacientes.length;
+        final paciente = pacientes[pacienteIndex];
+        final pacienteData = paciente.data();
+
+        final mesesAtras = i % 6;
+        final diasVariacion = i % 30;
+        final fecha = DateTime(ahora.year, ahora.month - mesesAtras, 1 + diasVariacion);
+
+        final estados = ['pendiente', 'confirmada', 'completada', 'cancelada'];
+        final estado = estados[i % estados.length];
+
+        final horas = ['09:00', '10:30', '14:00', '16:30', '18:00'];
+        final hora = horas[i % horas.length];
+
+        final motivos = [
+          'Consulta general',
+          'Control rutinario',
+          'Seguimiento tratamiento',
+          'Revisión de resultados',
+          'Consulta especializada'
+        ];
+        final motivo = motivos[i % motivos.length];
+
+        await FirebaseFirestore.instance.collection('citas').add({
+          'medico_id': user.uid,
+          'paciente_id': paciente.id,
+          'paciente_nombre': pacienteData['nombre'] ?? 'Paciente ${i + 1}',
+          'paciente_email': pacienteData['email'] ?? 'paciente${i + 1}@ejemplo.com',
+          'paciente_telefono': pacienteData['telefono'] ?? '555-000${i + 1}',
+          'fecha': Timestamp.fromDate(fecha),
+          'hora': hora,
+          'motivo': motivo,
+          'estado': estado,
+          'observaciones': 'Cita de prueba generada automáticamente',
+          'created_at': FieldValue.serverTimestamp(),
+        });
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('15 citas de prueba creadas exitosamente'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error al crear citas: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -187,7 +322,6 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
     );
   }
 
-  // ========== PÁGINA DE INICIO DEL MÉDICO ==========
   Widget _buildDoctorHomeContent() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -195,6 +329,21 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildDoctorHeader(),
+          const SizedBox(height: 20),
+
+          Card(
+            elevation: 3,
+            child: ListTile(
+              leading: const Icon(Icons.bar_chart, color: Colors.teal),
+              title: const Text('Estadísticas y Gráficas'),
+              subtitle: const Text('Ver análisis visual de tus citas'),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+              onTap: () {
+                setState(() => _currentIndex = 4);
+              },
+            ),
+          ),
+
           const SizedBox(height: 20),
           _buildEstadisticasRapidas(),
           const SizedBox(height: 20),
@@ -292,7 +441,7 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
           crossAxisCount: 2,
           crossAxisSpacing: 10,
           mainAxisSpacing: 10,
-          childAspectRatio: 1.3, // Más compacto
+          childAspectRatio: 1.3,
           children: [
             _buildStatCard(
               'Citas Hoy',
@@ -331,23 +480,23 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(12), // Más compacto
+        padding: const EdgeInsets.all(12),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              padding: const EdgeInsets.all(6), // Más pequeño
+              padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
                 color: color.withOpacity(0.1),
                 shape: BoxShape.circle,
               ),
-              child: Icon(icon, size: 20, color: color), // Ícono más pequeño
+              child: Icon(icon, size: 20, color: color),
             ),
             const SizedBox(height: 6),
             Text(
               value,
               style: const TextStyle(
-                fontSize: 16, // Texto más pequeño
+                fontSize: 16,
                 fontWeight: FontWeight.bold,
                 color: Colors.teal,
               ),
@@ -356,7 +505,7 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
             Text(
               title,
               style: const TextStyle(
-                fontSize: 10, // Texto más pequeño
+                fontSize: 10,
                 color: Colors.grey,
                 fontWeight: FontWeight.w500,
               ),
@@ -490,7 +639,6 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
     );
   }
 
-  // ========== PÁGINA DE PACIENTES ==========
   Widget _buildPacientesPage() {
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -622,7 +770,6 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
     );
   }
 
-  // ========== PÁGINA DE CITAS ==========
   Widget _buildCitasPage() {
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -754,7 +901,6 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
     );
   }
 
-  // ========== MÉTODOS AUXILIARES ==========
   Widget _buildEmptyState(String title, String subtitle, IconData icon, {double height = 150}) {
     return Container(
       height: height,

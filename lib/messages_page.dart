@@ -1,5 +1,5 @@
-// messages_page.dart - VERSIÓN COMPLETA CON FUNCIONALIDADES
 import 'package:flutter/material.dart';
+import 'doctor_home_page.dart';
 
 class MessagesPage extends StatefulWidget {
   const MessagesPage({super.key});
