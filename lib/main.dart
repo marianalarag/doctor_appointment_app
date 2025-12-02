@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'firebase_options.dart';
 
 // Importación de las pantallas
@@ -15,6 +16,10 @@ import 'privacy_page.dart';
 import 'about_page.dart';
 import 'profile_form_page.dart';
 import 'dashboard_page.dart';
+import 'graphics_page.dart';
+
+// Importa tu DashboardBloc
+import 'dashboard_bloc.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,56 +34,56 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: "DoctorApp",
-      theme: ThemeData(
-        primarySwatch: Colors.teal,
-        scaffoldBackgroundColor: const Color(0xFFF4F9F9),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
-          ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider<DashboardBloc>(
+          create: (context) => DashboardBloc(),
         ),
+      ],
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: "DoctorApp",
+        theme: ThemeData(
+          primarySwatch: Colors.teal,
+          scaffoldBackgroundColor: const Color(0xFFF4F9F9),
+          inputDecorationTheme: InputDecorationTheme(
+            filled: true,
+            fillColor: Colors.white,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+        ),
+        home: const AuthGate(),
+        routes: {
+          '/login': (context) => const LoginPage(),
+          '/register': (context) => const RegisterPage(),
+          '/reset': (context) => const ResetPasswordPage(),
+          '/home': (context) => const HomePage(),
+          '/messages': (context) => const MessagesPage(),
+          '/profile': (context) => const ProfilePage(),
+          '/settings': (context) => const SettingsPage(),
+          '/privacy': (context) => const PrivacyPage(),
+          '/about': (context) => const AboutPage(),
+          '/dashboard': (context) => const DashboardPage(),
+          '/graphics': (context) => const GraphicsPage(),
+        },
+        onGenerateRoute: (settings) {
+          if (settings.name == '/profile_form') {
+            final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+            return MaterialPageRoute(
+              builder: (context) => ProfileFormPage(uid: uid),
+            );
+          }
+          return null;
+        },
       ),
-
-      // Pantalla inicial depende del estado de autenticación
-      home: const AuthGate(),
-
-      // Definición de rutas
-      routes: {
-        '/login': (context) => const LoginPage(),
-        '/register': (context) => const RegisterPage(),
-        '/reset': (context) => const ResetPasswordPage(),
-        '/home': (context) => const HomePage(),
-        '/messages': (context) => const MessagesPage(),
-        '/profile': (context) => const ProfilePage(),
-        '/settings': (context) => const SettingsPage(),
-        '/privacy': (context) => const PrivacyPage(),
-        '/about': (context) => const AboutPage(),
-        '/dashboard': (context) => const DashboardPage(),
-      },
-
-      // Ruta con parámetros se maneja mediante onGenerateRoute
-      onGenerateRoute: (settings) {
-        // Manejo de la ruta '/profile_form' con parámetros
-        if (settings.name == '/profile_form') {
-          final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-          return MaterialPageRoute(
-            builder: (context) => ProfileFormPage(uid: uid),
-          );
-        }
-        return null;
-      },
     );
   }
 }
 
-/// Controla si el usuario está autenticado o no
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
@@ -87,16 +92,13 @@ class AuthGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
-        // Mientras se carga el estado de Firebase
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(
-                    color: Colors.teal,
-                  ),
+                  CircularProgressIndicator(color: Colors.teal),
                   SizedBox(height: 20),
                   Text(
                     'Cargando DoctorApp...',
@@ -112,12 +114,10 @@ class AuthGate extends StatelessWidget {
           );
         }
 
-        // Si el usuario está autenticado
         if (snapshot.hasData) {
           return const HomePage();
         }
 
-        // Si no está autenticado
         return const LoginPage();
       },
     );

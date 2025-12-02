@@ -55,17 +55,17 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
       LoadDashboardData event,
       Emitter<DashboardState> emit,
       ) async {
-    await _loadDashboardDataSimplified(emit);
+    await _loadDashboardDataReal(emit);
   }
 
   Future<void> _onRefreshDashboardData(
       RefreshDashboardData event,
       Emitter<DashboardState> emit,
       ) async {
-    await _loadDashboardDataSimplified(emit);
+    await _loadDashboardDataReal(emit);
   }
 
-  Future<void> _loadDashboardDataSimplified(
+  Future<void> _loadDashboardDataReal(
       Emitter<DashboardState> emit,
       ) async {
     emit(DashboardLoading());
@@ -77,67 +77,73 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
         return;
       }
 
-      // 1. Obtener nombre del médico (consulta simple)
+      // 1. Obtener información del médico
       final userDoc = await _firestore
           .collection('usuarios')
           .doc(user.uid)
           .get();
-      final medicoNombre = userDoc.data()?['nombre'] ?? 'Médico';
 
-      // 2. Obtener TODAS las citas del médico (SOLO 1 consulta simple)
+      final userData = userDoc.data() as Map<String, dynamic>?;
+      final medicoNombre = userData?['nombre'] ?? 'Dr. ' + (user.email?.split('@').first ?? 'Médico');
+
+      print('Cargando datos para médico: $medicoNombre');
+
+      // 2. Obtener TODAS las citas del médico usando el campo correcto
       final citasSnapshot = await _firestore
           .collection('citas')
-          .where('medico_id', isEqualTo: user.uid)
+          .where('id_medico', isEqualTo: user.uid)
           .get();
 
       final todasLasCitas = citasSnapshot.docs;
+      print('Total de citas encontradas: ${todasLasCitas.length}');
 
-      // 3. Calcular TODO en memoria (evita consultas complejas que necesitan índices)
+      // 3. Calcular métricas en memoria
       final ahora = DateTime.now();
+      final hoy = DateTime(ahora.year, ahora.month, ahora.day);
 
       // Métricas básicas
       final totalCitas = todasLasCitas.length;
 
+      // Citas pendientes (estado 'pendiente' y fecha futura)
       final citasPendientes = todasLasCitas
-          .where((doc) => doc['estado'] == 'pendiente')
+          .where((doc) {
+        final data = doc.data();
+        final estado = data['estado'] as String? ?? 'pendiente';
+        final fechaField = data['fecha_hora'] ?? data['fecha'];
+
+        if (fechaField is Timestamp) {
+          final fechaCita = fechaField.toDate();
+          return estado == 'pendiente' && fechaCita.isAfter(ahora);
+        }
+        return false;
+      })
           .length;
 
-      // Pacientes únicos
+      // Pacientes únicos - usando el campo correcto 'id_paciente'
       final pacientesIds = todasLasCitas
-          .map((doc) => doc['paciente_id'] as String)
+          .map((doc) => doc.data()['id_paciente'] as String? ?? '')
+          .where((id) => id.isNotEmpty)
           .toSet();
       final totalPacientes = pacientesIds.length;
 
-      // Próximas citas (filtro en memoria)
-      final proximasCitas = todasLasCitas
-          .where((doc) {
-        final fecha = (doc['fecha_hora'] as Timestamp).toDate();
-        final estado = doc['estado'] as String;
-        return estado == 'pendiente' && fecha.isAfter(ahora);
-      })
-          .take(5)
-          .map((doc) {
-        final data = doc.data();
-        return {'id': doc.id, ...data};
-      })
-          .toList();
+      // Próximas citas (5 más próximas) - CORREGIDO
+      final List<Map<String, dynamic>> proximasCitas = _obtenerProximasCitas(todasLasCitas, ahora);
 
-      // Citas de hoy (filtro en memoria)
-      final citasHoy = todasLasCitas.where((doc) {
-        final fecha = (doc['fecha_hora'] as Timestamp).toDate();
-        return fecha.year == ahora.year &&
-            fecha.month == ahora.month &&
-            fecha.day == ahora.day;
-      }).length;
+      // Citas de hoy - CORREGIDO
+      final citasHoy = _contarCitasHoy(todasLasCitas, hoy);
 
-      // Citas de esta semana (filtro en memoria)
-      final startOfWeek = ahora.subtract(Duration(days: ahora.weekday - 1));
-      final endOfWeek = startOfWeek.add(const Duration(days: 6));
+      // Citas de esta semana - CORREGIDO
+      final citasSemana = _contarCitasSemana(todasLasCitas, hoy);
 
-      final citasSemana = todasLasCitas.where((doc) {
-        final fecha = (doc['fecha_hora'] as Timestamp).toDate();
-        return fecha.isAfter(startOfWeek) && fecha.isBefore(endOfWeek);
-      }).length;
+      print('''
+Datos calculados:
+- Total citas: $totalCitas
+- Citas pendientes: $citasPendientes
+- Total pacientes: $totalPacientes
+- Citas hoy: $citasHoy
+- Citas semana: $citasSemana
+- Próximas citas: ${proximasCitas.length}
+      ''');
 
       emit(
         DashboardLoaded(
@@ -151,7 +157,104 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
         ),
       );
     } catch (e) {
-      emit(DashboardError('Error al cargar datos: $e'));
+      print('Error en DashboardBloc: $e');
+      emit(DashboardError('Error al cargar datos del dashboard: $e'));
     }
+  }
+
+  // MÉTODO CORREGIDO para obtener próximas citas
+  List<Map<String, dynamic>> _obtenerProximasCitas(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> todasLasCitas,
+      DateTime ahora) {
+
+    // Filtrar y ordenar citas pendientes futuras
+    final citasFuturas = todasLasCitas
+        .where((doc) {
+      final data = doc.data();
+      final estado = data['estado'] as String? ?? 'pendiente';
+      final fechaField = data['fecha_hora'] ?? data['fecha'];
+
+      if (fechaField is Timestamp) {
+        final fechaCita = fechaField.toDate();
+        return estado == 'pendiente' && fechaCita.isAfter(ahora);
+      }
+      return false;
+    })
+        .toList();
+
+    // Ordenar por fecha
+    citasFuturas.sort((a, b) {
+      final dataA = a.data();
+      final dataB = b.data();
+      final fechaA = (dataA['fecha_hora'] ?? dataA['fecha']) as Timestamp;
+      final fechaB = (dataB['fecha_hora'] ?? dataB['fecha']) as Timestamp;
+      return fechaA.compareTo(fechaB);
+    });
+
+    // Convertir a List<Map<String, dynamic>>
+    return citasFuturas
+        .take(5)
+        .map((doc) {
+      final data = doc.data();
+      final fechaField = data['fecha_hora'] ?? data['fecha'];
+      final fechaCita = (fechaField as Timestamp).toDate();
+
+      return {
+        'doc_id': doc.id,
+        'id_paciente': data['id_paciente'],
+        'nombre_paciente': data['nombre_paciente'] ?? 'Paciente',
+        'motivo': data['motivo'] ?? 'Consulta',
+        'fecha': fechaCita,
+        'hora': data['hora'] ?? '--:--',
+        'estado': data['estado'] ?? 'pendiente',
+      };
+    })
+        .toList();
+  }
+
+  // MÉTODO CORREGIDO para contar citas de hoy
+  int _contarCitasHoy(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> todasLasCitas,
+      DateTime hoy) {
+
+    return todasLasCitas.where((doc) {
+      final data = doc.data();
+      final fechaField = data['fecha_hora'] ?? data['fecha'];
+
+      if (fechaField is Timestamp) {
+        final fechaCita = fechaField.toDate();
+        final fechaCitaDia = DateTime(fechaCita.year, fechaCita.month, fechaCita.day);
+        return fechaCitaDia == hoy;
+      }
+      return false;
+    }).length;
+  }
+
+  // MÉTODO CORREGIDO para contar citas de la semana
+  int _contarCitasSemana(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> todasLasCitas,
+      DateTime hoy) {
+
+    final startOfWeek = hoy.subtract(Duration(days: hoy.weekday - 1));
+    final endOfWeek = startOfWeek.add(const Duration(days: 6));
+
+    return todasLasCitas.where((doc) {
+      final data = doc.data();
+      final fechaField = data['fecha_hora'] ?? data['fecha'];
+
+      if (fechaField is Timestamp) {
+        final fechaCita = fechaField.toDate();
+        final fechaCitaDia = DateTime(fechaCita.year, fechaCita.month, fechaCita.day);
+        return fechaCitaDia.isAfter(startOfWeek.subtract(const Duration(days: 1))) &&
+            fechaCitaDia.isBefore(endOfWeek.add(const Duration(days: 1)));
+      }
+      return false;
+    }).length;
+  }
+
+  // Método auxiliar para formatear fecha
+  String _formatearFecha(DateTime fecha) {
+    final meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    return '${fecha.day} ${meses[fecha.month - 1]} ${fecha.year}';
   }
 }

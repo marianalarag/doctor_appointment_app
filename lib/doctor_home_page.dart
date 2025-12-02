@@ -554,12 +554,21 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
 
             final ahora = DateTime.now();
             final citas = snapshot.data!
-                .where((cita) =>
-            cita['estado'] == 'pendiente' &&
-                (cita['fecha'] as Timestamp).toDate().isAfter(ahora))
+                .where((cita) {
+              // CORRECCIÓN: Verificar que fecha no sea null
+              final fechaField = cita['fecha'] as Timestamp?;
+              if (fechaField == null) return false;
+
+              return cita['estado'] == 'pendiente' &&
+                  fechaField.toDate().isAfter(ahora);
+            })
                 .toList()
-              ..sort((a, b) => (a['fecha'] as Timestamp)
-                  .compareTo(b['fecha'] as Timestamp));
+              ..sort((a, b) {
+                // CORRECCIÓN: Manejar fechas null
+                final fechaA = (a['fecha'] as Timestamp?)?.toDate() ?? DateTime.now();
+                final fechaB = (b['fecha'] as Timestamp?)?.toDate() ?? DateTime.now();
+                return fechaA.compareTo(fechaB);
+              });
 
             if (citas.isEmpty) {
               return _buildEmptyState(
@@ -585,7 +594,48 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
   }
 
   Widget _buildCitaCardMedico(Map<String, dynamic> cita) {
-    final fecha = (cita['fecha'] as Timestamp).toDate();
+    // CORRECCIÓN: Manejar fecha null
+    final fechaField = cita['fecha'] as Timestamp?;
+
+    if (fechaField == null) {
+      return Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: ListTile(
+          contentPadding: const EdgeInsets.all(12),
+          leading: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.person, color: Colors.grey, size: 18),
+          ),
+          title: Text(
+            cita['paciente_nombre'] ?? 'Paciente',
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
+          ),
+          subtitle: const Text(
+            'Fecha no disponible',
+            style: TextStyle(fontSize: 11),
+          ),
+          trailing: IconButton(
+            icon: const Icon(Icons.visibility, size: 16),
+            color: Colors.grey,
+            onPressed: () => _verDetallesCita(cita),
+          ),
+        ),
+      );
+    }
+
+    final fecha = fechaField.toDate(); // CORRECCIÓN: Usar fechaField
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -819,10 +869,51 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
   }
 
   Widget _buildCitaCompletaCard(Map<String, dynamic> cita) {
-    final fecha = (cita['fecha'] as Timestamp).toDate();
+    // CORRECCIÓN: Manejar el caso cuando 'fecha' es null
+    final fechaField = cita['fecha'] as Timestamp?;
+
+    if (fechaField == null) {
+      return Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: ListTile(
+          contentPadding: const EdgeInsets.all(12),
+          leading: Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.error,
+              color: Colors.grey,
+              size: 16,
+            ),
+          ),
+          title: const Text(
+            'Cita sin fecha',
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
+          ),
+          subtitle: const Text(
+            'Esta cita no tiene fecha asignada',
+            style: TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+    }
+
+    final fecha = fechaField.toDate(); // CORRECCIÓN: Usar fechaField en lugar de cita['fecha']
     final ahora = DateTime.now();
     final esPasada = fecha.isBefore(ahora);
 
+    // El resto del código sigue igual...
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       elevation: 2,

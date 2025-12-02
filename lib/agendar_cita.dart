@@ -1,4 +1,3 @@
-// agendar_cita_page.dart - VERSIÓN CORREGIDA
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_service.dart';
@@ -6,7 +5,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 class AgendarCitaPage extends StatefulWidget {
   final String? docId;
-  const AgendarCitaPage({super.key, this.docId});
+  final Map<String, dynamic>? doctorSeleccionado;
+
+  const AgendarCitaPage({
+    super.key,
+    this.docId,
+    this.doctorSeleccionado,
+  });
 
   @override
   State<AgendarCitaPage> createState() => _AgendarCitaPageState();
@@ -14,32 +19,28 @@ class AgendarCitaPage extends StatefulWidget {
 
 class _AgendarCitaPageState extends State<AgendarCitaPage> {
   final FirebaseService _service = FirebaseService();
-  final user = FirebaseAuth.instance.currentUser;
+  final User? user = FirebaseAuth.instance.currentUser;
 
   DateTime? fechaSeleccionada;
   TimeOfDay? horaSeleccionada;
   String motivo = '';
   String idMedico = '';
+  String nombreMedico = '';
   bool _cargando = false;
+  List<Map<String, dynamic>> _doctoresDisponibles = [];
 
-  final List<String> especialistas = [
-    'Cardiólogo',
-    'Dermatólogo',
-    'Ginecólogo',
-    'Pediatra',
-    'Psicólogo',
-  ];
-
-  // Controlador para el TextField
   final TextEditingController _motivoController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    // Inicializar con el primer especialista
-    if (idMedico.isEmpty) {
-      idMedico = especialistas.first;
+    _cargarDoctoresDisponibles();
+
+    if (widget.doctorSeleccionado != null) {
+      idMedico = widget.doctorSeleccionado!['doc_id'] ?? '';
+      nombreMedico = widget.doctorSeleccionado!['nombre'] ?? '';
     }
+
     if (widget.docId != null) _cargarCitaExistente();
   }
 
@@ -49,11 +50,31 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
     super.dispose();
   }
 
+  Future<void> _cargarDoctoresDisponibles() async {
+    try {
+      final doctores = await _service.obtenerMedicos();
+      if (mounted) {
+        setState(() {
+          _doctoresDisponibles = doctores;
+
+          if (idMedico.isEmpty && _doctoresDisponibles.isNotEmpty) {
+            idMedico = _doctoresDisponibles.first['doc_id'] ?? '';
+            nombreMedico = _doctoresDisponibles.first['nombre'] ?? '';
+          }
+        });
+      }
+    } catch (e) {
+      print('Error cargando doctores: $e');
+    }
+  }
+
   Future<void> _cargarCitaExistente() async {
+    if (!mounted) return;
+
     setState(() => _cargando = true);
     try {
       final data = await _service.obtenerCitaPorId(widget.docId!);
-      if (data != null) {
+      if (data != null && mounted) {
         final dynamic fechaField = data['fecha_hora'] ?? data['fecha'];
         final fechaHora = (fechaField is Timestamp)
             ? fechaField.toDate()
@@ -63,7 +84,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
           fechaSeleccionada = fechaHora;
           horaSeleccionada = TimeOfDay(hour: fechaHora.hour, minute: fechaHora.minute);
           motivo = data['motivo'] ?? '';
-          idMedico = data['id_medico'] ?? especialistas.first;
+          idMedico = data['id_medico'] ?? '';
           _motivoController.text = motivo;
         });
       }
@@ -77,7 +98,9 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
         );
       }
     } finally {
-      setState(() => _cargando = false);
+      if (mounted) {
+        setState(() => _cargando = false);
+      }
     }
   }
 
@@ -87,8 +110,25 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
       initialDate: fechaSeleccionada ?? DateTime.now(),
       firstDate: DateTime.now(),
       lastDate: DateTime(DateTime.now().year + 1),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Colors.teal,
+              onPrimary: Colors.white,
+              onSurface: Colors.black,
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.teal,
+              ),
+            ),
+          ),
+          child: child!,
+        );
+      },
     );
-    if (picked != null) {
+    if (picked != null && mounted) {
       setState(() => fechaSeleccionada = picked);
     }
   }
@@ -104,13 +144,29 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
     final picked = await showTimePicker(
       context: context,
       initialTime: horaSeleccionada ?? TimeOfDay.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Colors.teal,
+              onPrimary: Colors.white,
+              onSurface: Colors.black,
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.teal,
+              ),
+            ),
+          ),
+          child: child!,
+        );
+      },
     );
-    if (picked != null) {
+    if (picked != null && mounted) {
       setState(() => horaSeleccionada = picked);
     }
   }
 
-  // Obtener nombre del usuario actual
   Future<String> _obtenerNombreUsuario() async {
     try {
       final usuario = await _service.obtenerUsuarioActual();
@@ -121,7 +177,6 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
   }
 
   Future<void> _guardar() async {
-    // Validaciones básicas
     if (fechaSeleccionada == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Selecciona una fecha'))
@@ -143,6 +198,14 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
       return;
     }
 
+    if (idMedico.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Selecciona un médico'))
+      );
+      return;
+    }
+
+    if (!mounted) return;
     setState(() => _cargando = true);
 
     final fechaHora = DateTime(
@@ -155,25 +218,28 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
 
     try {
       final nombrePaciente = await _obtenerNombreUsuario();
-      final nombreMedico = 'Dr. $idMedico';
+
+      final doctorSeleccionado = _doctoresDisponibles.firstWhere(
+            (doctor) => doctor['doc_id'] == idMedico,
+        orElse: () => {'nombre': 'Médico', 'especialidad': 'General'},
+      );
+      final nombreMedicoReal = doctorSeleccionado['nombre'] ?? 'Médico';
 
       if (widget.docId == null) {
-        // Crear nueva cita
         await _service.crearCita(
           idMedico: idMedico,
           fechaHora: fechaHora,
           motivo: motivo.trim(),
           nombrePaciente: nombrePaciente,
-          nombreMedico: nombreMedico,
+          nombreMedico: nombreMedicoReal,
         );
       } else {
-        // Actualizar cita existente
         await _service.actualizarCita(
           docId: widget.docId!,
           fechaHora: fechaHora,
           motivo: motivo.trim(),
           idMedico: idMedico,
-          nombreMedico: nombreMedico,
+          nombreMedico: nombreMedicoReal,
         );
       }
 
@@ -190,7 +256,6 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
       if (mounted) {
         String mensajeError = 'Error al guardar la cita';
 
-        // Mensajes más específicos según el tipo de error
         if (e.toString().contains('no autenticado')) {
           mensajeError = 'Usuario no autenticado. Por favor inicia sesión nuevamente.';
         } else if (e.toString().contains('network') || e.toString().contains('Internet')) {
@@ -240,16 +305,17 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Selector de Especialista
+              // Selector de Médico - CORREGIDO SIN OVERFLOW
               Card(
                 elevation: 2,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       const Text(
-                        'Especialista',
+                        'Médico',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
@@ -257,18 +323,112 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      DropdownButtonFormField<String>(
-                        value: idMedico.isEmpty ? especialistas.first : idMedico,
-                        items: especialistas.map((especialidad) =>
-                            DropdownMenuItem(
-                              value: especialidad,
-                              child: Text(especialidad),
-                            )).toList(),
-                        onChanged: (value) => setState(() => idMedico = value ?? especialistas.first),
+
+                      if (widget.doctorSeleccionado != null) ...[
+                        Container(
+                          constraints: const BoxConstraints(
+                            maxHeight: 80,
+                          ),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.teal.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.teal),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.medical_services, color: Colors.teal, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      widget.doctorSeleccionado!['nombre'] ?? 'Médico',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.teal,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      widget.doctorSeleccionado!['especialidad'] ?? 'Especialista',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.teal.withOpacity(0.8),
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(Icons.check_circle, color: Colors.teal, size: 20),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          '¿Quieres cambiar de médico?',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+
+                      _doctoresDisponibles.isEmpty
+                          ? Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: const Center(
+                          child: Text(
+                            'No hay médicos disponibles',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      )
+                          : DropdownButtonFormField<String>(
+                        value: idMedico.isEmpty ? null : idMedico,
+                        items: _doctoresDisponibles.map((doctor) {
+                          final nombre = doctor['nombre'] ?? 'Médico';
+                          final especialidad = doctor['especialidad'] ?? 'General';
+                          final docId = doctor['doc_id'] ?? '';
+
+                          return DropdownMenuItem<String>(
+                            value: docId,
+                            child: SizedBox( // SOLUCIÓN SIMPLE
+                              width: double.infinity,
+                              child: Text(
+                                '$nombre - $especialidad',
+                                style: const TextStyle(fontSize: 14),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (value) {
+                          setState(() {
+                            idMedico = value ?? '';
+                          });
+                        },
                         decoration: const InputDecoration(
                           border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          hintText: 'Selecciona un médico',
                         ),
+                        isExpanded: true, // CLAVE PARA EVITAR OVERFLOW
                       ),
                     ],
                   ),
@@ -277,13 +437,14 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
 
               const SizedBox(height: 16),
 
-              // Selector de Fecha y Hora
+              // Selector de Fecha y Hora - CORREGIDO
               Card(
                 elevation: 2,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min, // IMPORTANTE: Evita overflow
                     children: [
                       const Text(
                         'Fecha y Hora',
@@ -295,7 +456,6 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                       ),
                       const SizedBox(height: 12),
 
-                      // Información de selección actual
                       if (fechaSeleccionada != null || horaSeleccionada != null) ...[
                         Container(
                           padding: const EdgeInsets.all(12),
@@ -306,6 +466,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min, // IMPORTANTE
                             children: [
                               const Text(
                                 'Selección actual:',
@@ -314,15 +475,21 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                                   color: Colors.grey,
                                   fontWeight: FontWeight.bold,
                                 ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: 4),
                               Text(
                                 'Fecha: ${_formatearFecha(fechaSeleccionada)}',
                                 style: const TextStyle(fontSize: 14),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                               Text(
                                 'Hora: ${_formatearHora(horaSeleccionada)}',
                                 style: const TextStyle(fontSize: 14),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
@@ -330,51 +497,47 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                         const SizedBox(height: 12),
                       ],
 
-                      // Botón para seleccionar fecha
-                      ElevatedButton(
-                        onPressed: _seleccionarFecha,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.teal,
-                          side: const BorderSide(color: Colors.teal),
-                          minimumSize: const Size(double.infinity, 50),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.calendar_today),
-                            const SizedBox(width: 8),
-                            Text(
-                              fechaSeleccionada == null
-                                  ? 'Seleccionar fecha'
-                                  : 'Cambiar fecha',
-                            ),
-                          ],
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _seleccionarFecha,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Colors.teal,
+                            side: const BorderSide(color: Colors.teal),
+                            minimumSize: const Size(double.infinity, 50),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.calendar_today),
+                              SizedBox(width: 8),
+                              Text('Seleccionar fecha'),
+                            ],
+                          ),
                         ),
                       ),
 
                       const SizedBox(height: 12),
 
-                      // Botón para seleccionar hora
-                      ElevatedButton(
-                        onPressed: fechaSeleccionada == null ? null : _seleccionarHora,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.teal,
-                          side: const BorderSide(color: Colors.teal),
-                          minimumSize: const Size(double.infinity, 50),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.access_time),
-                            const SizedBox(width: 8),
-                            Text(
-                              horaSeleccionada == null
-                                  ? 'Seleccionar hora'
-                                  : 'Cambiar hora',
-                            ),
-                          ],
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: fechaSeleccionada == null ? null : _seleccionarHora,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Colors.teal,
+                            side: const BorderSide(color: Colors.teal),
+                            minimumSize: const Size(double.infinity, 50),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.access_time),
+                              SizedBox(width: 8),
+                              Text('Seleccionar hora'),
+                            ],
+                          ),
                         ),
                       ),
                     ],
@@ -384,13 +547,14 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
 
               const SizedBox(height: 16),
 
-              // Campo de Motivo
+              // Campo de Motivo - CORREGIDO
               Card(
                 elevation: 2,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min, // IMPORTANTE
                     children: [
                       const Text(
                         'Motivo de la Consulta',
@@ -405,6 +569,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                         controller: _motivoController,
                         onChanged: (value) => motivo = value,
                         maxLines: 4,
+                        maxLength: 500,
                         decoration: const InputDecoration(
                           hintText: 'Describe el motivo de tu consulta...',
                           border: OutlineInputBorder(),
@@ -426,84 +591,99 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
 
               const SizedBox(height: 24),
 
-              // Botones de acción
+              // Botones de acción - CORREGIDOS
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Botón Guardar
-                  ElevatedButton(
-                    onPressed: _cargando ? null : _guardar,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: _cargando
-                        ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                        : Text(
-                      widget.docId == null ? 'Agendar Cita' : 'Guardar Cambios',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-
-                  // Botón Cancelar
-                  if (widget.docId != null) ...[
-                    const SizedBox(height: 12),
-                    OutlinedButton(
-                      onPressed: _cargando ? null : () => Navigator.pop(context),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.grey,
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _cargando ? null : _guardar,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.teal,
+                        foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                      child: const Text('Cancelar'),
+                      child: _cargando
+                          ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                          : Text(
+                        widget.docId == null ? 'Agendar Cita' : 'Guardar Cambios',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+
+                  if (widget.docId != null) ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: _cargando ? null : () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.grey,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text('Cancelar'),
+                      ),
                     ),
                   ],
                 ],
               ),
 
-              // Información adicional
               const SizedBox(height: 16),
+
+              // Información adicional - CORREGIDA (LÍNEA 412)
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: Colors.blue[50],
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Column(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min, // SOLUCIÓN AL OVERFLOW
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.info, color: Colors.blue, size: 16),
-                        SizedBox(width: 8),
-                        Text(
-                          'Información importante',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.blue,
+                        const Icon(Icons.info, color: Colors.blue, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Información importante',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue[700],
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
                     ),
-                    SizedBox(height: 8),
+                    const SizedBox(height: 8),
                     Text(
                       '• Las citas tienen una duración de 30 minutos\n'
-                          '• Puedes cancelar o modificar hasta 2 horas antes',
-                      style: TextStyle(fontSize: 12, color: Colors.blue),
+                          '• Puedes cancelar o modificar hasta 2 horas antes\n'
+                          '• Llega 10 minutos antes de tu cita',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue[700],
+                        height: 1.4,
+                      ),
                     ),
                   ],
                 ),

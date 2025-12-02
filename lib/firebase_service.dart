@@ -1,4 +1,3 @@
-// firebase_service.dart - VERSIÓN COMPLETA CON MÉTODOS PARA MÉDICOS
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -6,7 +5,7 @@ class FirebaseService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // ========== CREAR CITA (VERSIÓN SIMPLIFICADA) ==========
+  // ========== CREAR CITA ==========
   Future<String> crearCita({
     required String idMedico,
     required DateTime fechaHora,
@@ -17,7 +16,6 @@ class FirebaseService {
     final user = _auth.currentUser;
     if (user != null) {
       try {
-        // Crear la cita directamente sin validar disponibilidad
         final docRef = await _firestore.collection('citas').add({
           'id_paciente': user.uid,
           'id_medico': idMedico,
@@ -39,7 +37,7 @@ class FirebaseService {
     throw Exception('Usuario no autenticado');
   }
 
-  // ========== ACTUALIZAR CITA (VERSIÓN SIMPLIFICADA) ==========
+  // ========== ACTUALIZAR CITA ==========
   Future<void> actualizarCita({
     required String docId,
     required DateTime fechaHora,
@@ -216,19 +214,34 @@ class FirebaseService {
     }
   }
 
-  // Obtener médicos disponibles
+  // ========== MÉTODO OBTENER MÉDICOS ACTUALIZADO ==========
   Future<List<Map<String, dynamic>>> obtenerMedicos() async {
     try {
       final snapshot = await _firestore.collection('medicos').get();
+
       if (snapshot.docs.isEmpty) {
-        // Si no hay médicos en la base de datos, retornar lista por defecto
-        return [
-          {'nombre': 'Cardiólogo', 'especialidad': 'Cardiólogo', 'doc_id': 'cardio_default'},
-          {'nombre': 'Dermatólogo', 'especialidad': 'Dermatólogo', 'doc_id': 'derma_default'},
-          {'nombre': 'Ginecólogo', 'especialidad': 'Ginecólogo', 'doc_id': 'gineco_default'},
-          {'nombre': 'Pediatra', 'especialidad': 'Pediatra', 'doc_id': 'pediatra_default'},
-          {'nombre': 'Psicólogo', 'especialidad': 'Psicólogo', 'doc_id': 'psicologo_default'},
-        ];
+        // Si no hay médicos, también verificar en la colección usuarios con rol doctor
+        final usuariosSnapshot = await _firestore
+            .collection('usuarios')
+            .where('role', isEqualTo: 'doctor')
+            .get();
+
+        if (usuariosSnapshot.docs.isEmpty) {
+          return []; // Retornar lista vacía si no hay médicos
+        }
+
+        // Convertir usuarios doctores a formato médico
+        return usuariosSnapshot.docs.map((doc) {
+          final data = doc.data();
+          return {
+            'nombre': data['nombre'] ?? 'Dr. ' + (data['email']?.split('@').first ?? 'Médico'),
+            'especialidad': data['especialidad'] ?? 'General',
+            'doc_id': doc.id,
+            'email': data['email'] ?? '',
+            'telefono': data['telefono'] ?? '',
+            'disponible': data['disponible'] ?? true,
+          };
+        }).toList();
       }
 
       return snapshot.docs.map((doc) {
@@ -244,14 +257,7 @@ class FirebaseService {
       }).toList();
     } catch (e) {
       print('Error obteniendo médicos: $e');
-      // Retornar lista por defecto en caso de error
-      return [
-        {'nombre': 'Cardiólogo', 'especialidad': 'Cardiólogo', 'doc_id': 'cardio_default'},
-        {'nombre': 'Dermatólogo', 'especialidad': 'Dermatólogo', 'doc_id': 'derma_default'},
-        {'nombre': 'Ginecólogo', 'especialidad': 'Ginecólogo', 'doc_id': 'gineco_default'},
-        {'nombre': 'Pediatra', 'especialidad': 'Pediatra', 'doc_id': 'pediatra_default'},
-        {'nombre': 'Psicólogo', 'especialidad': 'Psicólogo', 'doc_id': 'psicologo_default'},
-      ];
+      return []; // Retornar lista vacía en caso de error
     }
   }
 
@@ -586,6 +592,79 @@ class FirebaseService {
     } catch (e) {
       print('Error obteniendo info médico: $e');
       return null;
+    }
+  }
+
+  // ========== MÉTODOS ADICIONALES ÚTILES ==========
+
+  // Verificar si un usuario es médico
+  Future<bool> esUsuarioMedico() async {
+    final role = await obtenerRolUsuarioActual();
+    return role == 'doctor';
+  }
+
+  // Obtener citas del día actual para un médico
+  Stream<List<Map<String, dynamic>>> obtenerCitasHoyMedico(String doctorId) {
+    final now = DateTime.now();
+    final inicioDia = DateTime(now.year, now.month, now.day);
+    final finDia = DateTime(now.year, now.month, now.day, 23, 59, 59);
+
+    return _firestore
+        .collection('citas')
+        .where('id_medico', isEqualTo: doctorId)
+        .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDia))
+        .where('fecha', isLessThanOrEqualTo: Timestamp.fromDate(finDia))
+        .orderBy('fecha')
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        final Map<String, dynamic> citaData;
+        if (data is Map<String, dynamic>) {
+          citaData = Map<String, dynamic>.from(data);
+        } else {
+          citaData = Map<String, dynamic>.from(data as Map);
+        }
+        citaData['doc_id'] = doc.id;
+        return citaData;
+      }).toList();
+    });
+  }
+
+  // Obtener total de citas por estado para un médico
+  Future<Map<String, int>> obtenerConteoCitasPorEstado(String doctorId) async {
+    try {
+      final snapshot = await _firestore
+          .collection('citas')
+          .where('id_medico', isEqualTo: doctorId)
+          .get();
+
+      final conteo = {
+        'pendiente': 0,
+        'confirmada': 0,
+        'completada': 0,
+        'cancelada': 0,
+        'total': snapshot.docs.length,
+      };
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data() as Map<String, dynamic>;
+        final estado = data['estado'] ?? 'pendiente';
+        if (conteo.containsKey(estado)) {
+          conteo[estado] = (conteo[estado] ?? 0) + 1;
+        }
+      }
+
+      return conteo;
+    } catch (e) {
+      print('Error obteniendo conteo de citas: $e');
+      return {
+        'pendiente': 0,
+        'confirmada': 0,
+        'completada': 0,
+        'cancelada': 0,
+        'total': 0,
+      };
     }
   }
 }
