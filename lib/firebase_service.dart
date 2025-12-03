@@ -5,7 +5,53 @@ class FirebaseService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // ========== CREAR CITA ==========
+  // ========== VALIDAR DISPONIBILIDAD ==========
+  Future<bool> validarDisponibilidad({
+    required String idMedico,
+    required DateTime fechaHora,
+    required String? citaIdExcluir, // Para cuando se edita una cita
+  }) async {
+    try {
+      // Convertir a fecha y hora
+      final inicioCita = fechaHora;
+      final finCita = fechaHora.add(const Duration(minutes: 30)); // Duración de la cita
+
+      // Consultar citas existentes para el médico en el mismo día
+      final inicioDia = DateTime(fechaHora.year, fechaHora.month, fechaHora.day);
+      final finDia = DateTime(fechaHora.year, fechaHora.month, fechaHora.day, 23, 59, 59);
+
+      final snapshot = await _firestore
+          .collection('citas')
+          .where('id_medico', isEqualTo: idMedico)
+          .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDia))
+          .where('fecha', isLessThanOrEqualTo: Timestamp.fromDate(finDia))
+          .where('estado', whereIn: ['pendiente', 'confirmada'])
+          .get();
+
+      for (final doc in snapshot.docs) {
+        // Excluir la cita actual si se está editando
+        if (citaIdExcluir != null && doc.id == citaIdExcluir) {
+          continue;
+        }
+
+        final citaData = doc.data();
+        final fechaCitaExistente = (citaData['fecha'] as Timestamp).toDate();
+        final finCitaExistente = fechaCitaExistente.add(const Duration(minutes: 30));
+
+        // Verificar superposición de horarios
+        if (inicioCita.isBefore(finCitaExistente) && finCita.isAfter(fechaCitaExistente)) {
+          return false; // Hay conflicto
+        }
+      }
+
+      return true; // Disponible
+    } catch (e) {
+      print('Error validando disponibilidad: $e');
+      return false;
+    }
+  }
+
+  // ========== CREAR CITA CON VALIDACIÓN ==========
   Future<String> crearCita({
     required String idMedico,
     required DateTime fechaHora,
@@ -16,10 +62,32 @@ class FirebaseService {
     final user = _auth.currentUser;
     if (user != null) {
       try {
+        // Validar disponibilidad antes de crear
+        final disponible = await validarDisponibilidad(
+          idMedico: idMedico,
+          fechaHora: fechaHora,
+          citaIdExcluir: null,
+        );
+
+        if (!disponible) {
+          throw Exception('El médico no está disponible en ese horario');
+        }
+
+        // Obtener el nombre real del médico
+        String nombreDoctorReal = nombreMedico;
+        try {
+          final medicoDoc = await _firestore.collection('usuarios').doc(idMedico).get();
+          if (medicoDoc.exists && medicoDoc.data()?['nombre'] != null) {
+            nombreDoctorReal = medicoDoc.data()!['nombre'];
+          }
+        } catch (e) {
+          print('Error obteniendo nombre del médico: $e');
+        }
+
         final docRef = await _firestore.collection('citas').add({
           'id_paciente': user.uid,
           'id_medico': idMedico,
-          'nombre_medico': nombreMedico,
+          'nombre_medico': nombreDoctorReal,
           'nombre_paciente': nombrePaciente,
           'motivo': motivo,
           'fecha': Timestamp.fromDate(fechaHora),
@@ -37,7 +105,7 @@ class FirebaseService {
     throw Exception('Usuario no autenticado');
   }
 
-  // ========== ACTUALIZAR CITA ==========
+  // ========== ACTUALIZAR CITA CON VALIDACIÓN ==========
   Future<void> actualizarCita({
     required String docId,
     required DateTime fechaHora,
@@ -46,11 +114,33 @@ class FirebaseService {
     required String nombreMedico,
   }) async {
     try {
+      // Validar disponibilidad (excluyendo la cita actual)
+      final disponible = await validarDisponibilidad(
+        idMedico: idMedico,
+        fechaHora: fechaHora,
+        citaIdExcluir: docId,
+      );
+
+      if (!disponible) {
+        throw Exception('El médico no está disponible en ese horario');
+      }
+
+      // Obtener el nombre real del médico
+      String nombreDoctorReal = nombreMedico;
+      try {
+        final medicoDoc = await _firestore.collection('usuarios').doc(idMedico).get();
+        if (medicoDoc.exists && medicoDoc.data()?['nombre'] != null) {
+          nombreDoctorReal = medicoDoc.data()!['nombre'];
+        }
+      } catch (e) {
+        print('Error obteniendo nombre del médico: $e');
+      }
+
       await _firestore.collection('citas').doc(docId).update({
         'fecha': Timestamp.fromDate(fechaHora),
         'motivo': motivo,
         'id_medico': idMedico,
-        'nombre_medico': nombreMedico,
+        'nombre_medico': nombreDoctorReal,
         'hora': '${fechaHora.hour.toString().padLeft(2, '0')}:${fechaHora.minute.toString().padLeft(2, '0')}',
         'updated_at': FieldValue.serverTimestamp(),
       });
@@ -60,57 +150,76 @@ class FirebaseService {
     }
   }
 
-  // ========== ELIMINAR CITA ==========
+  // ========== ELIMINAR/CANCELAR CITA ==========
   Future<void> eliminarCita({required String docId}) async {
     try {
-      await _firestore.collection('citas').doc(docId).delete();
+      await _firestore.collection('citas').doc(docId).update({
+        'estado': 'cancelada',
+        'updated_at': FieldValue.serverTimestamp(),
+      });
     } catch (e) {
-      print('Error eliminando cita: $e');
-      throw Exception('Error al eliminar la cita: $e');
+      print('Error cancelando cita: $e');
+      throw Exception('Error al cancelar la cita: $e');
     }
   }
 
   // ========== MÉTODOS DE CONSULTA ==========
 
-  // Obtener próximas citas del usuario
-  Stream<List<Map<String, dynamic>>> obtenerProximasCitasUsuario(String uid) {
-    return _firestore
-        .collection('citas')
-        .where('id_paciente', isEqualTo: uid)
-        .snapshots()
-        .map((snapshot) {
-      final ahora = DateTime.now();
-      final citasFuturas = <Map<String, dynamic>>[];
+  // Obtener próximas citas del usuario - OPTIMIZADO
+  // Método corregido para obtener citas con nombres de médicos
+  Future<List<Map<String, dynamic>>> obtenerProximasCitasUsuario(String usuarioId) async {
+    try {
+      // Primero obtener las citas del usuario
+      final citasSnapshot = await FirebaseFirestore.instance
+          .collection('citas')
+          .where('id_paciente', isEqualTo: usuarioId)
+          .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(
+          DateTime.now().subtract(const Duration(days: 1))))
+          .orderBy('fecha', descending: false)
+          .limit(10)
+          .get();
 
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        if (data != null) {
-          final Map<String, dynamic> citaData;
-          if (data is Map<String, dynamic>) {
-            citaData = Map<String, dynamic>.from(data);
-          } else {
-            citaData = Map<String, dynamic>.from(data as Map);
-          }
+      final List<Map<String, dynamic>> citasConNombres = [];
 
-          final fecha = citaData['fecha'];
-          if (fecha is Timestamp) {
-            final fechaCita = fecha.toDate();
-            if (fechaCita.isAfter(ahora)) {
-              citaData['doc_id'] = doc.id;
-              citasFuturas.add(citaData);
+      for (var doc in citasSnapshot.docs) {
+        final citaData = doc.data();
+        citaData['doc_id'] = doc.id; // Agregar ID del documento
+
+        // Obtener nombre del médico (ya debería venir en los datos)
+        String nombreMedico = citaData['nombre_medico'] ?? 'Dr. No especificado';
+
+        // Si no está en los datos, buscarlo
+        if (nombreMedico == 'Dr. No especificado') {
+          final medicoId = citaData['id_medico']?.toString() ?? '';
+          if (medicoId.isNotEmpty) {
+            try {
+              final medicoDoc = await FirebaseFirestore.instance
+                  .collection('usuarios')
+                  .doc(medicoId)
+                  .get();
+
+              if (medicoDoc.exists) {
+                final medicoData = medicoDoc.data();
+                nombreMedico = medicoData?['nombre']?.toString() ??
+                    medicoData?['displayName']?.toString() ??
+                    'Dr. $medicoId'.substring(0, 15);
+              }
+            } catch (e) {
+              print('Error obteniendo médico $medicoId: $e');
             }
           }
         }
+
+        // Agregar nombre del médico a los datos de la cita
+        citaData['nombre_medico'] = nombreMedico;
+        citasConNombres.add(citaData);
       }
 
-      citasFuturas.sort((a, b) {
-        final fechaA = a['fecha'] as Timestamp;
-        final fechaB = b['fecha'] as Timestamp;
-        return fechaA.compareTo(fechaB);
-      });
-
-      return citasFuturas;
-    });
+      return citasConNombres;
+    } catch (e) {
+      print('Error en obtenerProximasCitasUsuario: $e');
+      return [];
+    }
   }
 
   // Obtener todas las citas del usuario (Stream)
@@ -175,7 +284,7 @@ class FirebaseService {
           'email': user.email ?? '',
           'telefono': '',
           'historial_medico': '',
-          'role': 'patient', // Rol por defecto
+          'role': 'patient',
           'uid': user.uid,
           'created_at': FieldValue.serverTimestamp(),
         };
@@ -190,47 +299,21 @@ class FirebaseService {
     }
   }
 
-  // ========== MÉTODOS ADICIONALES ==========
-
-  // Crear usuario
-  Future<void> crearUsuario({
-    required String nombre,
-    required String email,
-    String telefono = '',
-    String historialMedico = '',
-    String role = 'patient',
-  }) async {
-    final user = _auth.currentUser;
-    if (user != null) {
-      await _firestore.collection('usuarios').doc(user.uid).set({
-        'nombre': nombre,
-        'email': email,
-        'telefono': telefono,
-        'historial_medico': historialMedico,
-        'role': role,
-        'uid': user.uid,
-        'created_at': FieldValue.serverTimestamp(),
-      });
-    }
-  }
-
-  // ========== MÉTODO OBTENER MÉDICOS ACTUALIZADO ==========
+  // ========== MÉTODO OBTENER MÉDICOS ==========
   Future<List<Map<String, dynamic>>> obtenerMedicos() async {
     try {
       final snapshot = await _firestore.collection('medicos').get();
 
       if (snapshot.docs.isEmpty) {
-        // Si no hay médicos, también verificar en la colección usuarios con rol doctor
         final usuariosSnapshot = await _firestore
             .collection('usuarios')
             .where('role', isEqualTo: 'doctor')
             .get();
 
         if (usuariosSnapshot.docs.isEmpty) {
-          return []; // Retornar lista vacía si no hay médicos
+          return [];
         }
 
-        // Convertir usuarios doctores a formato médico
         return usuariosSnapshot.docs.map((doc) {
           final data = doc.data();
           return {
@@ -257,11 +340,11 @@ class FirebaseService {
       }).toList();
     } catch (e) {
       print('Error obteniendo médicos: $e');
-      return []; // Retornar lista vacía en caso de error
+      return [];
     }
   }
 
-  // Cambiar estado de cita
+  // ========== MÉTODOS ADICIONALES ==========
   Future<void> cambiarEstadoCita({
     required String docId,
     required String estado,
@@ -312,8 +395,6 @@ class FirebaseService {
   }
 
   // ========== MÉTODOS ESPECÍFICOS PARA MÉDICOS ==========
-
-  // Obtener citas del médico con información del paciente
   Stream<List<Map<String, dynamic>>> obtenerCitasMedicoConPacientes(String doctorId) {
     return _firestore
         .collection('citas')
@@ -327,7 +408,6 @@ class FirebaseService {
         final citaData = doc.data() as Map<String, dynamic>;
         final pacienteId = citaData['id_paciente'];
 
-        // Obtener información del paciente
         final pacienteDoc = await _firestore.collection('usuarios').doc(pacienteId).get();
         final pacienteData = pacienteDoc.data();
 
@@ -346,7 +426,6 @@ class FirebaseService {
     });
   }
 
-  // Obtener pacientes únicos del médico
   Stream<List<Map<String, dynamic>>> obtenerPacientesDelMedico(String doctorId) {
     return _firestore
         .collection('citas')
@@ -361,17 +440,14 @@ class FirebaseService {
         final pacienteId = citaData['id_paciente'];
 
         if (!pacientesMap.containsKey(pacienteId)) {
-          // Obtener información completa del paciente
           final pacienteDoc = await _firestore.collection('usuarios').doc(pacienteId).get();
           final pacienteData = pacienteDoc.data();
 
           if (pacienteData != null) {
-            // Contar citas del paciente
             final citasPaciente = snapshot.docs
                 .where((d) => (d.data() as Map<String, dynamic>)['id_paciente'] == pacienteId)
                 .length;
 
-            // Contar citas pendientes
             final citasPendientes = snapshot.docs
                 .where((d) {
               final data = d.data() as Map<String, dynamic>;
@@ -395,7 +471,6 @@ class FirebaseService {
     });
   }
 
-  // Método auxiliar para obtener última cita
   String _obtenerUltimaCita(List<QueryDocumentSnapshot> docs, String pacienteId) {
     final citasPaciente = docs
         .where((doc) => (doc.data() as Map<String, dynamic>)['id_paciente'] == pacienteId)
@@ -418,7 +493,6 @@ class FirebaseService {
     return '${fecha.day} ${meses[fecha.month - 1]} ${fecha.year}';
   }
 
-  // Cambiar estado de cita como médico
   Future<void> cambiarEstadoCitaMedico({
     required String docId,
     required String estado,
@@ -431,7 +505,6 @@ class FirebaseService {
     });
   }
 
-  // Obtener estadísticas rápidas para el médico
   Stream<Map<String, dynamic>> obtenerEstadisticasMedico(String doctorId) {
     return _firestore
         .collection('citas')
@@ -443,7 +516,6 @@ class FirebaseService {
 
       final citas = snapshot.docs;
 
-      // Estadísticas básicas
       final totalCitas = citas.length;
       final citasHoy = citas.where((doc) {
         final fecha = (doc.data() as Map<String, dynamic>)['fecha'] as Timestamp;
@@ -457,7 +529,6 @@ class FirebaseService {
             (data['fecha'] as Timestamp).toDate().isAfter(now);
       }).length;
 
-      // Pacientes únicos
       final pacientesUnicos = citas
           .map((doc) => (doc.data() as Map<String, dynamic>)['id_paciente'])
           .toSet()
@@ -473,8 +544,6 @@ class FirebaseService {
   }
 
   // ========== MÉTODOS PARA DASHBOARD ==========
-
-  // Obtener estadísticas para el dashboard médico
   Stream<Map<String, int>> obtenerEstadisticasDashboard(String doctorId) {
     return _firestore
         .collection('citas')
@@ -666,5 +735,108 @@ class FirebaseService {
         'total': 0,
       };
     }
+  }
+
+  // ========== NUEVO: OBTENER CITAS DEL DÍA ACTUAL PARA PACIENTE ==========
+  Stream<List<Map<String, dynamic>>> obtenerCitasHoyPaciente(String pacienteId) {
+    final now = DateTime.now();
+    final inicioDia = DateTime(now.year, now.month, now.day);
+    final finDia = DateTime(now.year, now.month, now.day, 23, 59, 59);
+
+    return _firestore
+        .collection('citas')
+        .where('id_paciente', isEqualTo: pacienteId)
+        .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDia))
+        .where('fecha', isLessThanOrEqualTo: Timestamp.fromDate(finDia))
+        .where('estado', whereIn: ['pendiente', 'confirmada'])
+        .orderBy('fecha')
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        final Map<String, dynamic> citaData;
+        if (data is Map<String, dynamic>) {
+          citaData = Map<String, dynamic>.from(data);
+        } else {
+          citaData = Map<String, dynamic>.from(data as Map);
+        }
+        citaData['doc_id'] = doc.id;
+        return citaData;
+      }).toList();
+    });
+  }
+
+  // ========== NUEVO: VERIFICAR SI EL USUARIO YA TIENE CITA CON EL MÉDICO EN EL DÍA ==========
+  Future<bool> tieneCitaConMedicoEnDia({
+    required String pacienteId,
+    required String idMedico,
+    required DateTime fecha,
+  }) async {
+    try {
+      final inicioDia = DateTime(fecha.year, fecha.month, fecha.day);
+      final finDia = DateTime(fecha.year, fecha.month, fecha.day, 23, 59, 59);
+
+      final snapshot = await _firestore
+          .collection('citas')
+          .where('id_paciente', isEqualTo: pacienteId)
+          .where('id_medico', isEqualTo: idMedico)
+          .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDia))
+          .where('fecha', isLessThanOrEqualTo: Timestamp.fromDate(finDia))
+          .where('estado', whereIn: ['pendiente', 'confirmada'])
+          .limit(1)
+          .get();
+
+      return snapshot.docs.isNotEmpty;
+    } catch (e) {
+      print('Error verificando cita existente: $e');
+      return false;
+    }
+  }
+  // EN firebase_service.dart - Agrega este método
+  Stream<List<Map<String, dynamic>>> obtenerProximasCitasUsuarioStream(String usuarioId) {
+    return FirebaseFirestore.instance
+        .collection('citas')
+        .where('id_paciente', isEqualTo: usuarioId)
+        .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(
+        DateTime.now().subtract(const Duration(days: 1))))
+        .orderBy('fecha', descending: false)
+        .snapshots()
+        .asyncMap((snapshot) async {
+      final citasConNombres = <Map<String, dynamic>>[];
+
+      for (var doc in snapshot.docs) {
+        final citaData = doc.data() as Map<String, dynamic>;
+        final Map<String, dynamic> citaDataCopy = Map<String, dynamic>.from(citaData);
+        citaDataCopy['doc_id'] = doc.id;
+
+        // Obtener nombre del médico
+        final medicoId = citaDataCopy['id_medico']?.toString() ?? '';
+        String nombreMedico = citaDataCopy['nombre_medico'] ?? 'Dr. No especificado';
+
+        if (nombreMedico == 'Dr. No especificado' && medicoId.isNotEmpty) {
+          try {
+            final medicoDoc = await FirebaseFirestore.instance
+                .collection('usuarios')
+                .doc(medicoId)
+                .get();
+
+            if (medicoDoc.exists) {
+              final medicoData = medicoDoc.data();
+              nombreMedico = medicoData?['nombre']?.toString() ??
+                  medicoData?['displayName']?.toString() ??
+                  'Dr. $medicoId'.substring(0, 15);
+            }
+          } catch (e) {
+            print('Error obteniendo médico $medicoId: $e');
+          }
+        }
+
+        // Agregar nombre del médico a los datos de la cita
+        citaDataCopy['nombre_medico'] = nombreMedico;
+        citasConNombres.add(citaDataCopy);
+      }
+
+      return citasConNombres;
+    });
   }
 }

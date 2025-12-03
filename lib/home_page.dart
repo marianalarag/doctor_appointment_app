@@ -168,7 +168,6 @@ class _HomePageState extends State<HomePage> {
           );
         }
 
-        // CORRECCIÓN: Cast explícito para evitar el error del operador []
         final userData = userSnapshot.data?.data() as Map<String, dynamic>?;
         final role = userData?['role'] ?? 'patient';
 
@@ -267,13 +266,13 @@ class _HomePageState extends State<HomePage> {
           _buildWelcomeCard(),
           const SizedBox(height: 20),
           _buildActionButtons(),
-          const SizedBox(height: 30),
+          const SizedBox(height: 25),
           _buildEspecialistas(),
-          const SizedBox(height: 30),
+          const SizedBox(height: 25),
           _buildTipsRapidos(),
-          const SizedBox(height: 30),
+          const SizedBox(height: 25),
           _buildProximasCitasCompact(),
-          const SizedBox(height: 40),
+          const SizedBox(height: 30),
         ],
       ),
     );
@@ -475,10 +474,39 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildEspecialistas() {
-    final especialidadesUnicas = _doctoresDisponibles
-        .map((doctor) => doctor['especialidad'] ?? 'General')
-        .toSet()
-        .toList();
+    // Lista de 5 especialistas estáticos/de ejemplo
+    final especialistasEjemplo = [
+      {
+        'nombre': 'Dra. Ana García',
+        'especialidad': 'Cardióloga',
+        'icono': Icons.favorite,
+        'color': Colors.red,
+      },
+      {
+        'nombre': 'Dr. Carlos López',
+        'especialidad': 'Dermatólogo',
+        'icono': Icons.face,
+        'color': Colors.blue,
+      },
+      {
+        'nombre': 'Dra. María Rodríguez',
+        'especialidad': 'Pediatra',
+        'icono': Icons.child_care,
+        'color': Colors.green,
+      },
+      {
+        'nombre': 'Dr. Juan Pérez',
+        'especialidad': 'Ginecólogo',
+        'icono': Icons.woman,
+        'color': Colors.pink,
+      },
+      {
+        'nombre': 'Dra. Sofía Martínez',
+        'especialidad': 'Psicóloga',
+        'icono': Icons.psychology,
+        'color': Colors.purple,
+      },
+    ];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -491,16 +519,15 @@ class _HomePageState extends State<HomePage> {
             color: Colors.teal,
           ),
         ),
-        const SizedBox(height: 12),
-        especialidadesUnicas.isEmpty
-            ? _buildEmptyEspecialistas()
-            : SizedBox(
-          height: 100,
+        const SizedBox(height: 10), // Reducido de 12
+        SizedBox(
+          height: 100, // Reducido de 120
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
-            itemCount: especialidadesUnicas.length,
+            itemCount: especialistasEjemplo.length,
             itemBuilder: (context, index) {
-              return _buildSpecialistCard(especialidadesUnicas[index]);
+              final especialista = especialistasEjemplo[index];
+              return _buildSpecialistCardEjemplo(especialista);
             },
           ),
         ),
@@ -508,44 +535,21 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildEmptyEspecialistas() {
+  Widget _buildSpecialistCardEjemplo(Map<String, dynamic> especialista) {
     return Container(
-      height: 100,
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.medical_services_outlined, color: Colors.grey, size: 30),
-            SizedBox(height: 8),
-            Text(
-              'No hay especialistas disponibles',
-              style: TextStyle(color: Colors.grey, fontSize: 12),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSpecialistCard(String especialista) {
-    return Container(
-      width: 90,
-      margin: const EdgeInsets.only(right: 10),
+      width: 100, // Reducido de 130
+      margin: const EdgeInsets.only(right: 8), // Reducido de 12
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(12), // Reducido de 16
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 3,
-            offset: const Offset(0, 1),
+            color: Colors.teal.withOpacity(0.1),
+            blurRadius: 5, // Reducido de 8
+            offset: const Offset(0, 2), // Reducido de 3
           ),
         ],
+        border: Border.all(color: Colors.teal.withOpacity(0.2)),
       ),
       child: InkWell(
         onTap: () {
@@ -553,9 +557,9 @@ class _HomePageState extends State<HomePage> {
             SnackBar(
               content: Row(
                 children: [
-                  Icon(_getIconoEspecialidad(especialista), color: Colors.white, size: 18),
+                  Icon(especialista['icono'] as IconData, color: Colors.white, size: 16),
                   const SizedBox(width: 6),
-                  Text('Seleccionaste: $especialista'),
+                  Text('Especialista: ${especialista['especialidad']}'),
                 ],
               ),
               duration: const Duration(seconds: 2),
@@ -565,29 +569,36 @@ class _HomePageState extends State<HomePage> {
         },
         borderRadius: BorderRadius.circular(12),
         child: Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(8), // Reducido de 12
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
-                width: 32,
-                height: 32,
+                width: 32, // Reducido de 40
+                height: 32, // Reducido de 40
                 decoration: BoxDecoration(
-                  color: Colors.teal.withOpacity(0.1),
+                  gradient: LinearGradient(
+                    colors: [
+                      (especialista['color'] as Color).withOpacity(0.2),
+                      (especialista['color'] as Color).withOpacity(0.4),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
-                  _getIconoEspecialidad(especialista),
-                  color: Colors.teal,
-                  size: 16,
+                  especialista['icono'] as IconData,
+                  color: especialista['color'] as Color,
+                  size: 16, // Reducido de 20
                 ),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 6), // Reducido de 8
               Text(
-                especialista,
+                especialista['especialidad'] as String,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontSize: 11,
+                  fontSize: 10, // Reducido de 12
                   fontWeight: FontWeight.w600,
                   color: Colors.teal,
                 ),
@@ -597,6 +608,175 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildSpecialistCardAvanzada(Map<String, dynamic> especialista) {
+    return Container(
+      width: 140,
+      margin: const EdgeInsets.only(right: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Avatar con inicial
+          Container(
+            height: 70,
+            decoration: BoxDecoration(
+              color: (especialista['color'] as Color).withOpacity(0.1),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(16),
+                topRight: Radius.circular(16),
+              ),
+            ),
+            child: Center(
+              child: CircleAvatar(
+                radius: 25,
+                backgroundColor: especialista['color'] as Color,
+                child: Text(
+                  especialista['inicial'] as String,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // Información
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Column(
+              children: [
+                Text(
+                  especialista['especialidad'] as String,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.teal,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  especialista['nombre'] as String,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Colors.grey,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.teal.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    especialista['experiencia'] as String,
+                    style: const TextStyle(
+                      fontSize: 9,
+                      color: Colors.teal,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarDoctoresPorEspecialidad(String especialidad, List<Map<String, dynamic>> doctores) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(
+              _getIconoEspecialidad(especialidad),
+              color: Colors.teal,
+            ),
+            const SizedBox(width: 12),
+            Text('$especialidad'),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: doctores.isEmpty
+              ? const Center(
+            child: Text('No hay doctores en esta especialidad'),
+          )
+              : ListView.builder(
+            shrinkWrap: true,
+            itemCount: doctores.length,
+            itemBuilder: (context, index) {
+              final doctor = doctores[index];
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 6),
+                elevation: 1,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.teal.shade100,
+                    child: Text(
+                      doctor['nombre']?.toString().substring(0, 1) ?? 'D',
+                      style: const TextStyle(
+                        color: Colors.teal,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  title: Text(
+                    doctor['nombre']?.toString() ?? 'Doctor',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    '${doctor['especialidad'] ?? 'Especialista'}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(
+                    Icons.arrow_forward_ios,
+                    size: 14,
+                    color: Colors.grey,
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _abrirFormularioCitaConDoctor(doctor);
+                  },
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cerrar'),
+          ),
+        ],
       ),
     );
   }
@@ -669,15 +849,21 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
         const SizedBox(height: 12),
+
+        // CAMBIADO: Usar Stream en lugar de Future
         StreamBuilder<List<Map<String, dynamic>>>(
-          stream: user != null ? _service.obtenerProximasCitasUsuario(user!.uid) : null,
+          key: ValueKey('proximas_citas_${user?.uid}_${DateTime.now().millisecondsSinceEpoch}'),
+          stream: user != null
+              ? _service.obtenerProximasCitasUsuarioStream(user!.uid) // CAMBIADO A Stream
+              : null,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return _buildLoadingCardCompact();
             }
 
             if (snapshot.hasError) {
-              return _buildErrorCardCompact('Error: ${snapshot.error}');
+              print('Error cargando citas: ${snapshot.error}');
+              return _buildErrorCardCompact('Error al cargar citas');
             }
 
             if (!snapshot.hasData || snapshot.data!.isEmpty) {
@@ -688,7 +874,6 @@ class _HomePageState extends State<HomePage> {
             return Column(
               children: [
                 ...citas.take(2).map((cita) {
-                  // CORRECCIÓN: Manejo seguro de tipos
                   final fechaTimestamp = cita['fecha'];
                   DateTime fecha;
                   if (fechaTimestamp is Timestamp) {
@@ -727,6 +912,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildCitaCardCompact(Map<String, dynamic> cita, DateTime fecha, String docId) {
+    // MODIFICADO: Usar nombre_medico que ya viene del servicio
+    final nombreMedico = cita['nombre_medico'] ?? 'Dr. No especificado';
+
     return Card(
       elevation: 3,
       margin: const EdgeInsets.only(bottom: 10),
@@ -753,7 +941,7 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
         title: Text(
-          "Dr. ${cita['id_medico']}",
+          nombreMedico, // AHORA MUESTRA NOMBRE REAL, NO CÓDIGO
           style: const TextStyle(
             fontWeight: FontWeight.bold,
             fontSize: 14,
@@ -970,7 +1158,7 @@ class _HomePageState extends State<HomePage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildDetalleItem(Icons.person, 'Médico', 'Dr. ${cita['id_medico']}'),
+            _buildDetalleItem(Icons.person, 'Médico', cita['nombre_medico'] ?? 'Dr. No especificado'),
             const Divider(height: 20),
             _buildDetalleItem(Icons.calendar_today, 'Fecha', _formatearFecha(fecha)),
             const Divider(height: 20),
@@ -1110,7 +1298,12 @@ class _HomePageState extends State<HomePage> {
       MaterialPageRoute(builder: (_) => const AgendarCitaPage()),
     );
     if (created == true && mounted) {
-      setState(() {});
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      if (mounted) {
+        setState(() {});
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Row(
@@ -1121,6 +1314,7 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
           backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
         ),
       );
     }
@@ -1216,7 +1410,13 @@ class _HomePageState extends State<HomePage> {
       ),
     );
     if (created == true && mounted) {
-      setState(() {});
+      if (mounted) {
+        setState(() {
+          _currentIndex = _currentIndex;
+        });
+      }
+      await _recargarDatos();
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Row(

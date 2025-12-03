@@ -65,9 +65,7 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
     await _loadDashboardDataReal(emit);
   }
 
-  Future<void> _loadDashboardDataReal(
-      Emitter<DashboardState> emit,
-      ) async {
+  Future<void> _loadDashboardDataReal(Emitter<DashboardState> emit) async {
     emit(DashboardLoading());
 
     try {
@@ -77,72 +75,124 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
         return;
       }
 
-      // 1. Obtener información del médico
+      // DEBUG: Mostrar información del usuario
+      print('=== DASHBOARD BLOC ===');
+      print('UID del usuario: ${user.uid}');
+      print('Email: ${user.email}');
+
+      // 1. Obtener información del médico y VERIFICAR ROL
       final userDoc = await _firestore
           .collection('usuarios')
           .doc(user.uid)
           .get();
 
-      final userData = userDoc.data() as Map<String, dynamic>?;
-      final medicoNombre = userData?['nombre'] ?? 'Dr. ' + (user.email?.split('@').first ?? 'Médico');
+      if (!userDoc.exists) {
+        emit(DashboardError('No se encontró el perfil del médico'));
+        return;
+      }
 
-      print('Cargando datos para médico: $medicoNombre');
+      final userData = userDoc.data() as Map<String, dynamic>;
+      final role = userData['role'] ?? 'patient';
 
-      // 2. Obtener TODAS las citas del médico usando el campo correcto
+      // VERIFICAR que sea doctor
+      if (role != 'doctor') {
+        print('ERROR: El usuario no es doctor. Rol: $role');
+        emit(DashboardError('Este usuario no tiene permisos de doctor'));
+        return;
+      }
+
+      final medicoNombre = userData['nombre'] ?? 'Dr. ' + (user.email?.split('@').first ?? 'Médico');
+      print('Médico: $medicoNombre (Rol: $role)');
+
+      // 2. Obtener SOLO las citas de ESTE médico
       final citasSnapshot = await _firestore
           .collection('citas')
-          .where('id_medico', isEqualTo: user.uid)
+          .where('id_medico', isEqualTo: user.uid) // ← FILTRO POR DOCTOR ACTUAL
           .get();
 
-      final todasLasCitas = citasSnapshot.docs;
-      print('Total de citas encontradas: ${todasLasCitas.length}');
+      final citasDelDoctor = citasSnapshot.docs;
 
-      // 3. Calcular métricas en memoria
+      // DEBUG: Información detallada
+      print('Total citas encontradas para este doctor: ${citasDelDoctor.length}');
+
+      // Mostrar primeras 3 citas para debug
+      for (var i = 0; i < citasDelDoctor.length && i < 3; i++) {
+        final doc = citasDelDoctor[i];
+        final data = doc.data();
+        print('Cita ${i + 1}:');
+        print('  - ID: ${doc.id}');
+        print('  - ID Médico en BD: ${data['id_medico']}');
+        print('  - ID Médico esperado: ${user.uid}');
+        print('  - Paciente: ${data['nombre_paciente']}');
+        print('  - Fecha: ${data['fecha']}');
+        print('  - Estado: ${data['estado']}');
+      }
+
+      // 3. Calcular métricas SOLO con citas del doctor actual
       final ahora = DateTime.now();
       final hoy = DateTime(ahora.year, ahora.month, ahora.day);
 
       // Métricas básicas
-      final totalCitas = todasLasCitas.length;
+      final totalCitas = citasDelDoctor.length;
 
       // Citas pendientes (estado 'pendiente' y fecha futura)
-      final citasPendientes = todasLasCitas
+      final citasPendientes = citasDelDoctor
           .where((doc) {
         final data = doc.data();
         final estado = data['estado'] as String? ?? 'pendiente';
-        final fechaField = data['fecha_hora'] ?? data['fecha'];
+        final fechaField = data['fecha']; // ← USA 'fecha' (no 'fecha_hora')
 
         if (fechaField is Timestamp) {
           final fechaCita = fechaField.toDate();
-          return estado == 'pendiente' && fechaCita.isAfter(ahora);
+          final esPendiente = estado == 'pendiente' || estado == 'confirmada';
+          final esFutura = fechaCita.isAfter(ahora);
+          return esPendiente && esFutura;
         }
         return false;
       })
           .length;
 
       // Pacientes únicos - usando el campo correcto 'id_paciente'
-      final pacientesIds = todasLasCitas
-          .map((doc) => doc.data()['id_paciente'] as String? ?? '')
-          .where((id) => id.isNotEmpty)
-          .toSet();
+      final pacientesIds = <String>{};
+      for (final doc in citasDelDoctor) {
+        final pacienteId = doc.data()['id_paciente'] as String?;
+        if (pacienteId != null && pacienteId.isNotEmpty) {
+          pacientesIds.add(pacienteId);
+        }
+      }
       final totalPacientes = pacientesIds.length;
 
-      // Próximas citas (5 más próximas) - CORREGIDO
-      final List<Map<String, dynamic>> proximasCitas = _obtenerProximasCitas(todasLasCitas, ahora);
+      // Próximas citas (5 más próximas)
+      final List<Map<String, dynamic>> proximasCitas = _obtenerProximasCitas(citasDelDoctor, ahora);
 
-      // Citas de hoy - CORREGIDO
-      final citasHoy = _contarCitasHoy(todasLasCitas, hoy);
+      // Citas de hoy
+      final citasHoy = citasDelDoctor
+          .where((doc) {
+        final data = doc.data();
+        final fechaField = data['fecha'];
 
-      // Citas de esta semana - CORREGIDO
-      final citasSemana = _contarCitasSemana(todasLasCitas, hoy);
+        if (fechaField is Timestamp) {
+          final fechaCita = fechaField.toDate();
+          final fechaCitaDia = DateTime(fechaCita.year, fechaCita.month, fechaCita.day);
+          return fechaCitaDia == hoy;
+        }
+        return false;
+      })
+          .length;
+
+      // Citas de esta semana
+      final citasSemana = _contarCitasSemana(citasDelDoctor, hoy);
 
       print('''
-Datos calculados:
+RESUMEN DASHBOARD:
+- Doctor: $medicoNombre
 - Total citas: $totalCitas
-- Citas pendientes: $citasPendientes
+- Citas pendientes: $citasPendientes  
 - Total pacientes: $totalPacientes
 - Citas hoy: $citasHoy
 - Citas semana: $citasSemana
 - Próximas citas: ${proximasCitas.length}
+=== FIN DASHBOARD ===
       ''');
 
       emit(
@@ -156,70 +206,68 @@ Datos calculados:
           citasSemana: citasSemana,
         ),
       );
-    } catch (e) {
-      print('Error en DashboardBloc: $e');
-      emit(DashboardError('Error al cargar datos del dashboard: $e'));
+    } catch (e, stackTrace) {
+      print('ERROR CRÍTICO en DashboardBloc: $e');
+      print('Stack trace: $stackTrace');
+      emit(DashboardError('Error al cargar datos: ${e.toString()}'));
     }
   }
 
   // MÉTODO CORREGIDO para obtener próximas citas
   List<Map<String, dynamic>> _obtenerProximasCitas(
-      List<QueryDocumentSnapshot<Map<String, dynamic>>> todasLasCitas,
-      DateTime ahora) {
-
-    // Filtrar y ordenar citas pendientes futuras
-    final citasFuturas = todasLasCitas
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> citasDelDoctor,
+      DateTime ahora,
+      ) {
+    // Filtrar citas pendientes/confirmadas futuras
+    final citasFuturas = citasDelDoctor
         .where((doc) {
       final data = doc.data();
       final estado = data['estado'] as String? ?? 'pendiente';
-      final fechaField = data['fecha_hora'] ?? data['fecha'];
+      final fechaField = data['fecha'];
 
       if (fechaField is Timestamp) {
         final fechaCita = fechaField.toDate();
-        return estado == 'pendiente' && fechaCita.isAfter(ahora);
+        final esPendiente = estado == 'pendiente' || estado == 'confirmada';
+        final esFutura = fechaCita.isAfter(ahora);
+        return esPendiente && esFutura;
       }
       return false;
     })
         .toList();
 
-    // Ordenar por fecha
+    // Ordenar por fecha (más próximas primero)
     citasFuturas.sort((a, b) {
-      final dataA = a.data();
-      final dataB = b.data();
-      final fechaA = (dataA['fecha_hora'] ?? dataA['fecha']) as Timestamp;
-      final fechaB = (dataB['fecha_hora'] ?? dataB['fecha']) as Timestamp;
+      final fechaA = (a.data()['fecha'] as Timestamp);
+      final fechaB = (b.data()['fecha'] as Timestamp);
       return fechaA.compareTo(fechaB);
     });
 
-    // Convertir a List<Map<String, dynamic>>
-    return citasFuturas
-        .take(5)
-        .map((doc) {
+    // Convertir y limitar a 5
+    return citasFuturas.take(5).map((doc) {
       final data = doc.data();
-      final fechaField = data['fecha_hora'] ?? data['fecha'];
-      final fechaCita = (fechaField as Timestamp).toDate();
+      final fechaCita = (data['fecha'] as Timestamp).toDate();
 
       return {
         'doc_id': doc.id,
-        'id_paciente': data['id_paciente'],
+        'id_paciente': data['id_paciente'] ?? '',
         'nombre_paciente': data['nombre_paciente'] ?? 'Paciente',
         'motivo': data['motivo'] ?? 'Consulta',
         'fecha': fechaCita,
         'hora': data['hora'] ?? '--:--',
         'estado': data['estado'] ?? 'pendiente',
+        'id_medico': data['id_medico'] ?? '', // ← Agregado para debug
       };
-    })
-        .toList();
+    }).toList();
   }
 
   // MÉTODO CORREGIDO para contar citas de hoy
   int _contarCitasHoy(
-      List<QueryDocumentSnapshot<Map<String, dynamic>>> todasLasCitas,
-      DateTime hoy) {
-
-    return todasLasCitas.where((doc) {
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> citasDelDoctor,
+      DateTime hoy,
+      ) {
+    return citasDelDoctor.where((doc) {
       final data = doc.data();
-      final fechaField = data['fecha_hora'] ?? data['fecha'];
+      final fechaField = data['fecha'];
 
       if (fechaField is Timestamp) {
         final fechaCita = fechaField.toDate();
@@ -232,15 +280,15 @@ Datos calculados:
 
   // MÉTODO CORREGIDO para contar citas de la semana
   int _contarCitasSemana(
-      List<QueryDocumentSnapshot<Map<String, dynamic>>> todasLasCitas,
-      DateTime hoy) {
-
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> citasDelDoctor,
+      DateTime hoy,
+      ) {
     final startOfWeek = hoy.subtract(Duration(days: hoy.weekday - 1));
     final endOfWeek = startOfWeek.add(const Duration(days: 6));
 
-    return todasLasCitas.where((doc) {
+    return citasDelDoctor.where((doc) {
       final data = doc.data();
-      final fechaField = data['fecha_hora'] ?? data['fecha'];
+      final fechaField = data['fecha'];
 
       if (fechaField is Timestamp) {
         final fechaCita = fechaField.toDate();

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'dashboard_bloc.dart';
 
 class GraphicsPage extends StatefulWidget {
@@ -15,15 +17,160 @@ class _GraphicsPageState extends State<GraphicsPage> {
   final List<String> _chartTitles = [
     'Citas por Mes',
     'Estado de Citas',
-    'Pacientes por Médico'
+    'Mis Pacientes'  // Cambiado de "Pacientes por Médico" a "Mis Pacientes"
   ];
+
+  // Agregar Firestore y Auth
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  // Variables para datos reales
+  List<Map<String, dynamic>> _citasPorMes = [];
+  List<Map<String, dynamic>> _estadosCitas = [];
+  List<Map<String, dynamic>> _misPacientes = [];
+  bool _isLoadingData = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Cargar datos reales de Firestore
+      _cargarDatosReales();
       context.read<DashboardBloc>().add(LoadDashboardData());
     });
+  }
+
+  Future<void> _cargarDatosReales() async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    setState(() {
+      _isLoadingData = true;
+    });
+
+    try {
+      // 1. OBTENER CITAS REALES DEL DOCTOR ACTUAL
+      final citasSnapshot = await _firestore
+          .collection('citas')
+          .where('id_medico', isEqualTo: user.uid)  // ← SOLO CITAS DEL DOCTOR ACTUAL
+          .get();
+
+      final citasReales = citasSnapshot.docs;
+
+      print('Citas reales encontradas para gráficas: ${citasReales.length}');
+
+      // 2. CALCULAR DATOS REALES PARA GRÁFICAS
+      _calcularCitasPorMes(citasReales);
+      _calcularEstadosCitas(citasReales);
+      _calcularMisPacientes(citasReales);
+
+      setState(() {
+        _isLoadingData = false;
+      });
+
+    } catch (e) {
+      print('Error cargando datos para gráficas: $e');
+      setState(() {
+        _isLoadingData = false;
+      });
+    }
+  }
+
+  void _calcularCitasPorMes(List<QueryDocumentSnapshot<Map<String, dynamic>>> citas) {
+    final meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+    // Inicializar contadores para cada mes
+    final contadorMeses = List<int>.filled(12, 0);
+
+    for (final doc in citas) {
+      final data = doc.data();
+      final fechaField = data['fecha'];
+
+      if (fechaField is Timestamp) {
+        final fechaCita = fechaField.toDate();
+        final mesIndex = fechaCita.month - 1; // Los meses van de 1-12
+
+        if (mesIndex >= 0 && mesIndex < 12) {
+          contadorMeses[mesIndex]++;
+        }
+      }
+    }
+
+    // Crear datos para la gráfica
+    _citasPorMes = meses.asMap().entries.map((entry) {
+      final index = entry.key;
+      final mes = entry.value;
+      return {
+        'month': mes,
+        'appointments': contadorMeses[index],
+      };
+    }).toList();
+
+    print('Citas por mes calculadas: $_citasPorMes');
+  }
+
+  void _calcularEstadosCitas(List<QueryDocumentSnapshot<Map<String, dynamic>>> citas) {
+    final contadorEstados = {
+      'pendiente': 0,
+      'confirmada': 0,
+      'completada': 0,
+      'cancelada': 0,
+    };
+
+    for (final doc in citas) {
+      final data = doc.data();
+      final estado = data['estado'] as String? ?? 'pendiente';
+
+      if (contadorEstados.containsKey(estado)) {
+        contadorEstados[estado] = (contadorEstados[estado] ?? 0) + 1;
+      } else {
+        contadorEstados['pendiente'] = (contadorEstados['pendiente'] ?? 0) + 1;
+      }
+    }
+
+    // Solo incluir estados que tengan citas
+    _estadosCitas = [
+      if (contadorEstados['pendiente']! > 0)
+        {'status': 'Pendientes', 'count': contadorEstados['pendiente']!, 'color': Colors.orange},
+      if (contadorEstados['confirmada']! > 0)
+        {'status': 'Confirmadas', 'count': contadorEstados['confirmada']!, 'color': Colors.blue},
+      if (contadorEstados['completada']! > 0)
+        {'status': 'Completadas', 'count': contadorEstados['completada']!, 'color': Colors.green},
+      if (contadorEstados['cancelada']! > 0)
+        {'status': 'Canceladas', 'count': contadorEstados['cancelada']!, 'color': Colors.red},
+    ];
+
+    print('Estados de citas calculados: $_estadosCitas');
+  }
+
+  void _calcularMisPacientes(List<QueryDocumentSnapshot<Map<String, dynamic>>> citas) {
+    final pacientesMap = <String, Map<String, dynamic>>{};
+
+    for (final doc in citas) {
+      final data = doc.data();
+      final pacienteId = data['id_paciente'] as String? ?? '';
+      final pacienteNombre = data['nombre_paciente'] as String? ?? 'Paciente';
+
+      if (pacienteId.isNotEmpty) {
+        if (!pacientesMap.containsKey(pacienteId)) {
+          pacientesMap[pacienteId] = {
+            'id': pacienteId,
+            'nombre': pacienteNombre,
+            'citasCount': 0,
+          };
+        }
+        pacientesMap[pacienteId]!['citasCount'] = (pacientesMap[pacienteId]!['citasCount'] as int) + 1;
+      }
+    }
+
+    // Convertir a lista y ordenar por cantidad de citas
+    _misPacientes = pacientesMap.values.toList();
+    _misPacientes.sort((a, b) => (b['citasCount'] as int).compareTo(a['citasCount'] as int));
+
+    // Limitar a los primeros 10 pacientes para la gráfica
+    _misPacientes = _misPacientes.take(10).toList();
+
+    print('Mis pacientes calculados: ${_misPacientes.length} pacientes');
   }
 
   @override
@@ -37,6 +184,10 @@ class _GraphicsPageState extends State<GraphicsPage> {
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
+              setState(() {
+                _isLoadingData = true;
+              });
+              _cargarDatosReales();
               context.read<DashboardBloc>().add(RefreshDashboardData());
             },
           ),
@@ -44,7 +195,7 @@ class _GraphicsPageState extends State<GraphicsPage> {
       ),
       body: BlocBuilder<DashboardBloc, DashboardState>(
         builder: (context, state) {
-          if (state is DashboardLoading) {
+          if (_isLoadingData || state is DashboardLoading) {
             return const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -122,10 +273,18 @@ class _GraphicsPageState extends State<GraphicsPage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  SizedBox(
-                    height: 300,
-                    child: _buildCurrentChart(state),
-                  ),
+
+                  // Verificar si hay datos para mostrar
+                  if (_currentChartIndex == 0 && _citasPorMes.isEmpty ||
+                      _currentChartIndex == 1 && _estadosCitas.isEmpty ||
+                      _currentChartIndex == 2 && _misPacientes.isEmpty)
+                    _buildEmptyDataMessage()
+                  else
+                    SizedBox(
+                      height: 300,
+                      child: _buildCurrentChart(state),
+                    ),
+
                   const SizedBox(height: 16),
                   _buildChartLegend(state),
                 ],
@@ -138,6 +297,35 @@ class _GraphicsPageState extends State<GraphicsPage> {
           // Resumen de datos
           _buildDataSummary(state),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyDataMessage() {
+    return SizedBox(
+      height: 300,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.bar_chart, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            const Text(
+              'No hay datos suficientes',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _currentChartIndex == 0
+                  ? 'Agenda citas para ver estadísticas por mes'
+                  : _currentChartIndex == 1
+                  ? 'No hay citas registradas'
+                  : 'No tienes pacientes registrados',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.grey),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -191,48 +379,43 @@ class _GraphicsPageState extends State<GraphicsPage> {
       case 1:
         return _buildAppointmentsStatusChart(state);
       case 2:
-        return _buildPatientsPerDoctorChart(state);
+        return _buildMyPatientsChart(state);  // Cambiado el nombre
       default:
         return const Center(child: Text('Gráfica no disponible'));
     }
   }
 
-  // Gráfica 1: Citas por Mes (Gráfica de Barras)
+  // Gráfica 1: Citas por Mes (CON DATOS REALES)
   Widget _buildMonthlyAppointmentsChart(DashboardLoaded state) {
-    // Datos de ejemplo - en una app real estos vendrían de Firebase
-    final monthlyData = [
-      {'month': 'Ene', 'appointments': 12},
-      {'month': 'Feb', 'appointments': 18},
-      {'month': 'Mar', 'appointments': 15},
-      {'month': 'Abr', 'appointments': 22},
-      {'month': 'May', 'appointments': 19},
-      {'month': 'Jun', 'appointments': 25},
-    ];
+    final maxY = _citasPorMes.isNotEmpty
+        ? (_citasPorMes.map((m) => m['appointments'] as int).reduce((a, b) => a > b ? a : b) + 2).toDouble()
+        : 10.0;
 
     return BarChart(
       BarChartData(
         alignment: BarChartAlignment.spaceAround,
-        maxY: 30,
+        maxY: maxY,
         barTouchData: BarTouchData(
           enabled: true,
           touchTooltipData: BarTouchTooltipData(
             tooltipBgColor: Colors.teal.withOpacity(0.8),
             getTooltipItem: (group, groupIndex, rod, rodIndex) {
-              return BarTooltipItem(
-                '${monthlyData[groupIndex]['month']}\n',
-                const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
-                children: [
-                  TextSpan(
-                    text: '${monthlyData[groupIndex]['appointments']} citas',
-                    style: const TextStyle(
-                      color: Colors.white,
-                    ),
+              if (groupIndex < _citasPorMes.length) {
+                return BarTooltipItem(
+                  '${_citasPorMes[groupIndex]['month']}\n',
+                  const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
                   ),
-                ],
-              );
+                  children: [
+                    TextSpan(
+                      text: '${_citasPorMes[groupIndex]['appointments']} ${(_citasPorMes[groupIndex]['appointments'] as int) == 1 ? 'cita' : 'citas'}',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ],
+                );
+              }
+              return BarTooltipItem('', const TextStyle());
             },
           ),
         ),
@@ -243,11 +426,11 @@ class _GraphicsPageState extends State<GraphicsPage> {
               showTitles: true,
               getTitlesWidget: (value, meta) {
                 final index = value.toInt();
-                if (index >= 0 && index < monthlyData.length) {
+                if (index >= 0 && index < _citasPorMes.length) {
                   return Padding(
                     padding: const EdgeInsets.only(top: 8.0),
                     child: Text(
-                      monthlyData[index]['month'] as String,
+                      _citasPorMes[index]['month'] as String,
                       style: const TextStyle(
                         fontSize: 12,
                         color: Colors.teal,
@@ -280,7 +463,7 @@ class _GraphicsPageState extends State<GraphicsPage> {
         ),
         gridData: const FlGridData(show: false),
         borderData: FlBorderData(show: false),
-        barGroups: monthlyData.asMap().entries.map((entry) {
+        barGroups: _citasPorMes.asMap().entries.map((entry) {
           final index = entry.key;
           final data = entry.value;
           return BarChartGroupData(
@@ -299,20 +482,17 @@ class _GraphicsPageState extends State<GraphicsPage> {
     );
   }
 
-  // Gráfica 2: Estado de Citas (Gráfica de Pie)
+  // Gráfica 2: Estado de Citas (CON DATOS REALES)
   Widget _buildAppointmentsStatusChart(DashboardLoaded state) {
-    // Datos de ejemplo basados en el estado actual
-    final statusData = [
-      {'status': 'Completadas', 'count': state.totalCitas - state.citasPendientes, 'color': Colors.green},
-      {'status': 'Pendientes', 'count': state.citasPendientes, 'color': Colors.orange},
-      {'status': 'Canceladas', 'count': (state.totalCitas * 0.1).toInt(), 'color': Colors.red},
-    ];
+    if (_estadosCitas.isEmpty) {
+      return _buildEmptyDataMessage();
+    }
 
     return PieChart(
       PieChartData(
         sectionsSpace: 4,
         centerSpaceRadius: 40,
-        sections: statusData.map((data) {
+        sections: _estadosCitas.map((data) {
           return PieChartSectionData(
             color: data['color'] as Color,
             value: (data['count'] as int).toDouble(),
@@ -327,27 +507,52 @@ class _GraphicsPageState extends State<GraphicsPage> {
         }).toList(),
         pieTouchData: PieTouchData(
           touchCallback: (FlTouchEvent event, pieTouchResponse) {
-            // Interactividad: mostrar tooltip al tocar
+            // Interactividad
           },
         ),
       ),
     );
   }
 
-  // Gráfica 3: Pacientes por Médico (Gráfica de Líneas)
-  Widget _buildPatientsPerDoctorChart(DashboardLoaded state) {
-    // Datos de ejemplo - en una app real estos vendrían de Firebase
-    final doctorData = [
-      {'doctor': 'Dr. García', 'patients': 45},
-      {'doctor': 'Dr. López', 'patients': 38},
-      {'doctor': 'Dr. Martínez', 'patients': 52},
-      {'doctor': 'Dr. Rodríguez', 'patients': 29},
-      {'doctor': 'Dr. Hernández', 'patients': 41},
-    ];
+  // Gráfica 3: MIS Pacientes (CON DATOS REALES) - MODIFICADA
+  Widget _buildMyPatientsChart(DashboardLoaded state) {
+    if (_misPacientes.isEmpty) {
+      return _buildEmptyDataMessage();
+    }
 
-    return LineChart(
-      LineChartData(
-        gridData: const FlGridData(show: true),
+    final maxPacientes = _misPacientes.isNotEmpty
+        ? (_misPacientes.map((p) => p['citasCount'] as int).reduce((a, b) => a > b ? a : b) + 2).toDouble()
+        : 10.0;
+
+    return BarChart(
+      BarChartData(
+        alignment: BarChartAlignment.spaceAround,
+        maxY: maxPacientes,
+        barTouchData: BarTouchData(
+          enabled: true,
+          touchTooltipData: BarTouchTooltipData(
+            tooltipBgColor: Colors.teal.withOpacity(0.8),
+            getTooltipItem: (group, groupIndex, rod, rodIndex) {
+              if (groupIndex < _misPacientes.length) {
+                final paciente = _misPacientes[groupIndex];
+                return BarTooltipItem(
+                  '${paciente['nombre']}\n',
+                  const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  children: [
+                    TextSpan(
+                      text: '${paciente['citasCount']} ${(paciente['citasCount'] as int) == 1 ? 'cita' : 'citas'}',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ],
+                );
+              }
+              return BarTooltipItem('', const TextStyle());
+            },
+          ),
+        ),
         titlesData: FlTitlesData(
           show: true,
           bottomTitles: AxisTitles(
@@ -355,21 +560,28 @@ class _GraphicsPageState extends State<GraphicsPage> {
               showTitles: true,
               getTitlesWidget: (value, meta) {
                 final index = value.toInt();
-                if (index >= 0 && index < doctorData.length) {
+                if (index >= 0 && index < _misPacientes.length) {
+                  final paciente = _misPacientes[index];
+                  final nombre = paciente['nombre'] as String;
+                  final iniciales = nombre.split(' ').map((n) => n.isNotEmpty ? n[0] : '').take(2).join();
+
                   return Padding(
                     padding: const EdgeInsets.only(top: 8.0),
-                    child: Text(
-                      doctorData[index]['doctor'] as String,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Colors.teal,
+                    child: Tooltip(
+                      message: nombre,
+                      child: Text(
+                        iniciales,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.teal,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                   );
                 }
                 return const Text('');
               },
-              reservedSize: 40,
             ),
           ),
           leftTitles: AxisTitles(
@@ -387,58 +599,26 @@ class _GraphicsPageState extends State<GraphicsPage> {
               reservedSize: 40,
             ),
           ),
+          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         ),
-        borderData: FlBorderData(
-          show: true,
-          border: Border.all(color: const Color(0xff37434d), width: 1),
-        ),
-        minX: 0,
-        maxX: doctorData.length.toDouble() - 1,
-        minY: 0,
-        maxY: 60,
-        lineBarsData: [
-          LineChartBarData(
-            spots: doctorData.asMap().entries.map((entry) {
-              final index = entry.key;
-              final data = entry.value;
-              return FlSpot(index.toDouble(), (data['patients'] as int).toDouble());
-            }).toList(),
-            isCurved: true,
-            color: Colors.teal,
-            barWidth: 4,
-            isStrokeCapRound: true,
-            dotData: const FlDotData(show: true),
-            belowBarData: BarAreaData(
-              show: true,
-              color: Colors.teal.withOpacity(0.3),
-            ),
-          ),
-        ],
-        lineTouchData: LineTouchData(
-          touchTooltipData: LineTouchTooltipData(
-            tooltipBgColor: Colors.teal.withOpacity(0.8),
-            getTooltipItems: (List<LineBarSpot> touchedSpots) {
-              return touchedSpots.map((spot) {
-                final doctorIndex = spot.x.toInt();
-                return LineTooltipItem(
-                  '${doctorData[doctorIndex]['doctor']}\n',
-                  const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  children: [
-                    TextSpan(
-                      text: '${doctorData[doctorIndex]['patients']} pacientes',
-                      style: const TextStyle(
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                );
-              }).toList();
-            },
-          ),
-        ),
+        gridData: const FlGridData(show: false),
+        borderData: FlBorderData(show: false),
+        barGroups: _misPacientes.asMap().entries.map((entry) {
+          final index = entry.key;
+          final paciente = entry.value;
+          return BarChartGroupData(
+            x: index,
+            barRods: [
+              BarChartRodData(
+                toY: (paciente['citasCount'] as int).toDouble(),
+                color: _getBarColor(index),
+                width: 20,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ],
+          );
+        }).toList(),
       ),
     );
   }
@@ -446,52 +626,58 @@ class _GraphicsPageState extends State<GraphicsPage> {
   Widget _buildChartLegend(DashboardLoaded state) {
     switch (_currentChartIndex) {
       case 0:
-        return const Column(
+        return Column(
           children: [
-            Text(
-              'Leyenda:',
+            const Text(
+              'Mis Citas por Mes',
               style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal),
             ),
-            SizedBox(height: 8),
+            const SizedBox(height: 8),
             Text(
-              'Cada barra representa el total de citas agendadas en un mes específico. '
-                  'Toca las barras para ver detalles.',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              _citasPorMes.isEmpty
+                  ? 'No tienes citas registradas por mes'
+                  : 'Total de citas agendadas por mes. Datos reales de tu consultorio.',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
               textAlign: TextAlign.center,
             ),
           ],
         );
       case 1:
+        if (_estadosCitas.isEmpty) {
+          return const SizedBox();
+        }
         return Column(
           children: [
             const Text(
-              'Distribución de Estados:',
+              'Distribución de Estados',
               style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal),
             ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 16,
               runSpacing: 8,
-              children: [
-                _buildLegendItem(Colors.green, 'Completadas'),
-                _buildLegendItem(Colors.orange, 'Pendientes'),
-                _buildLegendItem(Colors.red, 'Canceladas'),
-              ],
+              children: _estadosCitas.map((data) {
+                return _buildLegendItem(
+                    data['color'] as Color,
+                    '${data['status']} (${data['count']})'
+                );
+              }).toList(),
             ),
           ],
         );
       case 2:
-        return const Column(
+        return Column(
           children: [
-            Text(
-              'Leyenda:',
+            const Text(
+              'Mis Pacientes Más Frecuentes',
               style: TextStyle(fontWeight: FontWeight.bold, color: Colors.teal),
             ),
-            SizedBox(height: 8),
+            const SizedBox(height: 8),
             Text(
-              'La línea muestra la cantidad de pacientes atendidos por cada médico. '
-                  'Toca los puntos para ver detalles específicos.',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              _misPacientes.isEmpty
+                  ? 'No tienes pacientes registrados'
+                  : 'Pacientes ordenados por cantidad de citas. Toca las barras para ver nombres.',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
               textAlign: TextAlign.center,
             ),
           ],
@@ -531,7 +717,7 @@ class _GraphicsPageState extends State<GraphicsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Resumen de Datos en Tiempo Real',
+              'Resumen de Mis Datos',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
@@ -549,9 +735,16 @@ class _GraphicsPageState extends State<GraphicsPage> {
               children: [
                 _buildSummaryItem('Total Citas', state.totalCitas.toString(), Icons.calendar_today),
                 _buildSummaryItem('Citas Pendientes', state.citasPendientes.toString(), Icons.pending_actions),
-                _buildSummaryItem('Pacientes Únicos', state.totalPacientes.toString(), Icons.people),
+                _buildSummaryItem('Mis Pacientes', state.totalPacientes.toString(), Icons.people),
                 _buildSummaryItem('Citas Esta Semana', state.citasSemana.toString(), Icons.event_note),
               ],
+            ),
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              'Datos en tiempo real - Última actualización: ${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
+              style: const TextStyle(fontSize: 10, color: Colors.grey, fontStyle: FontStyle.italic),
             ),
           ],
         ),
@@ -605,7 +798,11 @@ class _GraphicsPageState extends State<GraphicsPage> {
       Colors.green,
       Colors.orange,
       Colors.purple,
-      Colors.red,
+      Colors.pink,
+      Colors.indigo,
+      Colors.amber,
+      Colors.cyan,
+      Colors.deepOrange,
     ];
     return colors[index % colors.length];
   }

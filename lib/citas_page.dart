@@ -153,28 +153,49 @@ class _CitasPageState extends State<CitasPage> {
 
     switch (_filtroSeleccionado) {
       case 0: // Próximas
-        return _service.obtenerProximasCitasUsuario(user!.uid);
+        return _service.obtenerProximasCitasUsuarioStream(user!.uid); // CAMBIADO
+
       case 1: // Pasadas
         return _service.obtenerCitasDelUsuarioStream(user!.uid)
-            .map((snapshot) {
+            .asyncMap((snapshot) async {
           final citasPasadas = <Map<String, dynamic>>[];
           for (final doc in snapshot.docs) {
-            final data = doc.data();
-            if (data != null) {
-              final Map<String, dynamic> citaData;
-              if (data is Map<String, dynamic>) {
-                citaData = Map<String, dynamic>.from(data);
-              } else {
-                citaData = Map<String, dynamic>.from(data as Map);
-              }
+            final data = doc.data() as Map<String, dynamic>;
+            final Map<String, dynamic> citaData = Map<String, dynamic>.from(data);
 
-              final fecha = citaData['fecha'];
-              if (fecha is Timestamp) {
-                final fechaCita = fecha.toDate();
-                if (fechaCita.isBefore(ahora)) {
-                  citaData['doc_id'] = doc.id;
-                  citasPasadas.add(citaData);
+            final fecha = citaData['fecha'];
+            if (fecha is Timestamp) {
+              final fechaCita = fecha.toDate();
+              if (fechaCita.isBefore(ahora)) {
+                citaData['doc_id'] = doc.id;
+
+                // Obtener nombre del médico si no está
+                if (!citaData.containsKey('nombre_medico') || citaData['nombre_medico'] == null) {
+                  final medicoId = citaData['id_medico']?.toString() ?? '';
+                  String nombreMedico = 'Dr. No especificado';
+
+                  if (medicoId.isNotEmpty) {
+                    try {
+                      final medicoDoc = await FirebaseFirestore.instance
+                          .collection('usuarios')
+                          .doc(medicoId)
+                          .get();
+
+                      if (medicoDoc.exists) {
+                        final medicoData = medicoDoc.data();
+                        nombreMedico = medicoData?['nombre']?.toString() ??
+                            medicoData?['displayName']?.toString() ??
+                            'Dr. $medicoId'.substring(0, 15);
+                      }
+                    } catch (e) {
+                      print('Error obteniendo médico $medicoId: $e');
+                    }
+                  }
+
+                  citaData['nombre_medico'] = nombreMedico;
                 }
+
+                citasPasadas.add(citaData);
               }
             }
           }
@@ -188,23 +209,44 @@ class _CitasPageState extends State<CitasPage> {
 
           return citasPasadas;
         });
+
       case 2: // Todas
       default:
         return _service.obtenerCitasDelUsuarioStream(user!.uid)
-            .map((snapshot) {
+            .asyncMap((snapshot) async {
           final todasLasCitas = <Map<String, dynamic>>[];
           for (final doc in snapshot.docs) {
-            final data = doc.data();
-            if (data != null) {
-              final Map<String, dynamic> citaData;
-              if (data is Map<String, dynamic>) {
-                citaData = Map<String, dynamic>.from(data);
-              } else {
-                citaData = Map<String, dynamic>.from(data as Map);
+            final data = doc.data() as Map<String, dynamic>;
+            final Map<String, dynamic> citaData = Map<String, dynamic>.from(data);
+            citaData['doc_id'] = doc.id;
+
+            // Obtener nombre del médico si no está
+            if (!citaData.containsKey('nombre_medico') || citaData['nombre_medico'] == null) {
+              final medicoId = citaData['id_medico']?.toString() ?? '';
+              String nombreMedico = 'Dr. No especificado';
+
+              if (medicoId.isNotEmpty) {
+                try {
+                  final medicoDoc = await FirebaseFirestore.instance
+                      .collection('usuarios')
+                      .doc(medicoId)
+                      .get();
+
+                  if (medicoDoc.exists) {
+                    final medicoData = medicoDoc.data();
+                    nombreMedico = medicoData?['nombre']?.toString() ??
+                        medicoData?['displayName']?.toString() ??
+                        'Dr. $medicoId'.substring(0, 15);
+                  }
+                } catch (e) {
+                  print('Error obteniendo médico $medicoId: $e');
+                }
               }
-              citaData['doc_id'] = doc.id;
-              todasLasCitas.add(citaData);
+
+              citaData['nombre_medico'] = nombreMedico;
             }
+
+            todasLasCitas.add(citaData);
           }
 
           // Ordenar por fecha
@@ -221,6 +263,8 @@ class _CitasPageState extends State<CitasPage> {
 
   Widget _buildCitaCard(Map<String, dynamic> cita, DateTime fecha, String docId) {
     final esPasada = fecha.isBefore(DateTime.now());
+    // CORREGIDO: Usar nombre_medico en lugar de id_medico
+    final nombreMedico = cita['nombre_medico'] ?? 'Dr. No especificado';
 
     return Card(
       elevation: 3,
@@ -233,17 +277,17 @@ class _CitasPageState extends State<CitasPage> {
           width: 50,
           height: 50,
           decoration: BoxDecoration(
-            color: _getColorEspecialidad(cita['id_medico']).withOpacity(0.1),
+            color: _getColorEspecialidad(cita['especialidad'] ?? 'General').withOpacity(0.1),
             borderRadius: BorderRadius.circular(25),
           ),
           child: Icon(
             esPasada ? Icons.history : Icons.medical_services,
-            color: _getColorEspecialidad(cita['id_medico']),
+            color: _getColorEspecialidad(cita['especialidad'] ?? 'General'),
             size: 24,
           ),
         ),
         title: Text(
-          "Dr. ${cita['id_medico']}",
+          nombreMedico, // AHORA MUESTRA NOMBRE REAL
           style: TextStyle(
             fontWeight: FontWeight.bold,
             color: esPasada ? Colors.grey : Colors.black,
@@ -429,7 +473,7 @@ class _CitasPageState extends State<CitasPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildDetalleItem('Médico:', 'Dr. ${cita['id_medico']}'),
+              _buildDetalleItem('Médico:', cita['nombre_medico'] ?? 'Dr. No especificado'),
               _buildDetalleItem('Paciente:', cita['nombre_paciente'] ?? 'Usuario'),
               _buildDetalleItem('Fecha:', _formatearFecha(fecha)),
               _buildDetalleItem('Hora:', cita['hora']),

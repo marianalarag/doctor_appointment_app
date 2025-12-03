@@ -23,7 +23,7 @@ class _CalendarioPageState extends State<CalendarioPage> {
     return CupertinoPageScaffold(
       backgroundColor: CupertinoColors.systemGroupedBackground,
       navigationBar: CupertinoNavigationBar(
-        middle: const Text('Calendario de Citas'),
+        middle: const Text('Mis Citas'),
         backgroundColor: CupertinoColors.systemTeal,
         trailing: CupertinoButton(
           padding: EdgeInsets.zero,
@@ -129,10 +129,10 @@ class _CalendarioPageState extends State<CalendarioPage> {
 
             const SizedBox(height: 16),
 
-            // Lista de citas
+            // Lista de citas - MODIFICADO: Solo citas del usuario
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
-                stream: _service.obtenerTodasLasCitas(),
+                stream: user != null ? _service.obtenerCitasDelUsuarioStream(user!.uid) : null,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(
@@ -183,7 +183,7 @@ class _CalendarioPageState extends State<CalendarioPage> {
                           ),
                           SizedBox(height: 16),
                           Text(
-                            'No hay citas programadas',
+                            'No tienes citas programadas',
                             style: TextStyle(
                               fontSize: 16,
                               color: CupertinoColors.systemGrey,
@@ -212,8 +212,8 @@ class _CalendarioPageState extends State<CalendarioPage> {
                           const SizedBox(height: 16),
                           Text(
                             _selectedDay == null
-                                ? 'No hay citas programadas'
-                                : 'No hay citas para el ${_formatearFecha(_selectedDay!)}',
+                                ? 'No tienes citas programadas'
+                                : 'No tienes citas para el ${_formatearFecha(_selectedDay!)}',
                             style: const TextStyle(
                               fontSize: 16,
                               color: CupertinoColors.systemGrey,
@@ -286,13 +286,13 @@ class _CalendarioPageState extends State<CalendarioPage> {
                                   ),
                                 ),
                                 const SizedBox(width: 12),
-                                // Información de la cita
+                                // Información de la cita - MODIFICADO: Muestra nombre_medico
                                 Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        'Dr. ${cita['id_medico']}',
+                                        cita['nombre_medico'] ?? 'Dr. No especificado',
                                         style: const TextStyle(
                                           fontWeight: FontWeight.w600,
                                           fontSize: 16,
@@ -301,20 +301,20 @@ class _CalendarioPageState extends State<CalendarioPage> {
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        'Paciente: ${cita['nombre_paciente'] ?? 'Usuario'}',
+                                        'Motivo: ${cita['motivo'] ?? 'Consulta'}',
                                         style: const TextStyle(
                                           fontSize: 14,
                                           color: CupertinoColors.systemGrey,
                                         ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
                                       Text(
-                                        '${_formatearFecha(fecha)} - ${cita['motivo']}',
+                                        '${_formatearFecha(fecha)}',
                                         style: const TextStyle(
                                           fontSize: 13,
                                           color: CupertinoColors.systemGrey2,
                                         ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
                                       ),
                                     ],
                                   ),
@@ -439,7 +439,7 @@ class _CalendarioPageState extends State<CalendarioPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildInfoItem('Médico:', 'Dr. ${cita['id_medico']}'),
+              _buildInfoItem('Médico:', cita['nombre_medico'] ?? 'Dr. No especificado'),
               _buildInfoItem('Paciente:', cita['nombre_paciente'] ?? 'Usuario'),
               _buildInfoItem('Fecha:', _formatearFecha(fecha)),
               _buildInfoItem('Hora:', _formatearHora(fecha)),

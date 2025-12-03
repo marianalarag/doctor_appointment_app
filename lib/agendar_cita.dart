@@ -27,6 +27,8 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
   String idMedico = '';
   String nombreMedico = '';
   bool _cargando = false;
+  bool _validando = false;
+  String? _errorDisponibilidad;
   List<Map<String, dynamic>> _doctoresDisponibles = [];
 
   final TextEditingController _motivoController = TextEditingController();
@@ -104,6 +106,51 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
     }
   }
 
+  Future<void> _validarDisponibilidad() async {
+    if (fechaSeleccionada == null || horaSeleccionada == null || idMedico.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _validando = true;
+      _errorDisponibilidad = null;
+    });
+
+    try {
+      final fechaHora = DateTime(
+        fechaSeleccionada!.year,
+        fechaSeleccionada!.month,
+        fechaSeleccionada!.day,
+        horaSeleccionada!.hour,
+        horaSeleccionada!.minute,
+      );
+
+      final disponible = await _service.validarDisponibilidad(
+        idMedico: idMedico,
+        fechaHora: fechaHora,
+        citaIdExcluir: widget.docId,
+      );
+
+      if (!disponible) {
+        setState(() {
+          _errorDisponibilidad = '⚠️ El médico no está disponible en este horario';
+        });
+      } else {
+        setState(() {
+          _errorDisponibilidad = null;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorDisponibilidad = 'Error validando disponibilidad: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _validando = false);
+      }
+    }
+  }
+
   Future<void> _seleccionarFecha() async {
     final picked = await showDatePicker(
       context: context,
@@ -129,7 +176,11 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
       },
     );
     if (picked != null && mounted) {
-      setState(() => fechaSeleccionada = picked);
+      setState(() {
+        fechaSeleccionada = picked;
+        _errorDisponibilidad = null;
+      });
+      _validarDisponibilidad();
     }
   }
 
@@ -163,7 +214,11 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
       },
     );
     if (picked != null && mounted) {
-      setState(() => horaSeleccionada = picked);
+      setState(() {
+        horaSeleccionada = picked;
+        _errorDisponibilidad = null;
+      });
+      _validarDisponibilidad();
     }
   }
 
@@ -205,6 +260,44 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
       return;
     }
 
+    // Validar disponibilidad final antes de guardar
+    setState(() => _validando = true);
+    try {
+      final fechaHora = DateTime(
+        fechaSeleccionada!.year,
+        fechaSeleccionada!.month,
+        fechaSeleccionada!.day,
+        horaSeleccionada!.hour,
+        horaSeleccionada!.minute,
+      );
+
+      final disponible = await _service.validarDisponibilidad(
+        idMedico: idMedico,
+        fechaHora: fechaHora,
+        citaIdExcluir: widget.docId,
+      );
+
+      if (!disponible) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('El médico ya tiene una cita en este horario'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error validando disponibilidad: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    } finally {
+      setState(() => _validando = false);
+    }
+
     if (!mounted) return;
     setState(() => _cargando = true);
 
@@ -231,7 +324,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
           fechaHora: fechaHora,
           motivo: motivo.trim(),
           nombrePaciente: nombrePaciente,
-          nombreMedico: nombreMedicoReal,
+          nombreMedico: nombreMedicoReal, // <-- Esto guarda el nombre
         );
       } else {
         await _service.actualizarCita(
@@ -239,7 +332,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
           fechaHora: fechaHora,
           motivo: motivo.trim(),
           idMedico: idMedico,
-          nombreMedico: nombreMedicoReal,
+          nombreMedico: nombreMedicoReal, // <-- Esto guarda el nombre
         );
       }
 
@@ -250,13 +343,15 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
               backgroundColor: Colors.green,
             )
         );
-        Navigator.pop(context, true);
+        Navigator.pop(context, true); // Devuelve true para indicar éxito
       }
     } catch (e) {
       if (mounted) {
         String mensajeError = 'Error al guardar la cita';
 
-        if (e.toString().contains('no autenticado')) {
+        if (e.toString().contains('no disponible')) {
+          mensajeError = 'El médico no está disponible en ese horario';
+        } else if (e.toString().contains('no autenticado')) {
           mensajeError = 'Usuario no autenticado. Por favor inicia sesión nuevamente.';
         } else if (e.toString().contains('network') || e.toString().contains('Internet')) {
           mensajeError = 'Error de conexión. Verifica tu internet e intenta nuevamente.';
@@ -305,7 +400,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Selector de Médico - CORREGIDO SIN OVERFLOW
+              // Selector de Médico
               Card(
                 elevation: 2,
                 child: Padding(
@@ -407,7 +502,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
 
                           return DropdownMenuItem<String>(
                             value: docId,
-                            child: SizedBox( // SOLUCIÓN SIMPLE
+                            child: SizedBox(
                               width: double.infinity,
                               child: Text(
                                 '$nombre - $especialidad',
@@ -421,14 +516,18 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                         onChanged: (value) {
                           setState(() {
                             idMedico = value ?? '';
+                            _errorDisponibilidad = null;
                           });
+                          if (fechaSeleccionada != null && horaSeleccionada != null) {
+                            _validarDisponibilidad();
+                          }
                         },
                         decoration: const InputDecoration(
                           border: OutlineInputBorder(),
                           contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                           hintText: 'Selecciona un médico',
                         ),
-                        isExpanded: true, // CLAVE PARA EVITAR OVERFLOW
+                        isExpanded: true,
                       ),
                     ],
                   ),
@@ -437,14 +536,14 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
 
               const SizedBox(height: 16),
 
-              // Selector de Fecha y Hora - CORREGIDO
+              // Selector de Fecha y Hora
               Card(
                 elevation: 2,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min, // IMPORTANTE: Evita overflow
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       const Text(
                         'Fecha y Hora',
@@ -456,6 +555,34 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                       ),
                       const SizedBox(height: 12),
 
+                      // Mensaje de disponibilidad
+                      if (_errorDisponibilidad != null) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.orange),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.warning, color: Colors.orange, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _errorDisponibilidad!,
+                                  style: const TextStyle(
+                                    color: Colors.orange,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+
                       if (fechaSeleccionada != null || horaSeleccionada != null) ...[
                         Container(
                           padding: const EdgeInsets.all(12),
@@ -466,7 +593,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min, // IMPORTANTE
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               const Text(
                                 'Selección actual:',
@@ -540,6 +667,26 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                           ),
                         ),
                       ),
+
+                      // Indicador de validación
+                      if (_validando) ...[
+                        const SizedBox(height: 12),
+                        const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Validando disponibilidad...',
+                              style: TextStyle(fontSize: 12, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -547,14 +694,14 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
 
               const SizedBox(height: 16),
 
-              // Campo de Motivo - CORREGIDO
+              // Campo de Motivo
               Card(
                 elevation: 2,
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min, // IMPORTANTE
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       const Text(
                         'Motivo de la Consulta',
@@ -591,14 +738,40 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
 
               const SizedBox(height: 24),
 
-              // Botones de acción - CORREGIDOS
+              // Botones de acción
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (_errorDisponibilidad != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.orange),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.info, color: Colors.orange, size: 20),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'No puedes agendar en este horario porque el médico ya tiene una cita programada',
+                              style: TextStyle(color: Colors.orange, fontSize: 14),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: _cargando ? null : _guardar,
+                      onPressed: (_cargando || _validando || _errorDisponibilidad != null)
+                          ? null
+                          : _guardar,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.teal,
                         foregroundColor: Colors.white,
@@ -645,7 +818,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
 
               const SizedBox(height: 16),
 
-              // Información adicional - CORREGIDA (LÍNEA 412)
+              // Información adicional
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -654,7 +827,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min, // SOLUCIÓN AL OVERFLOW
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Row(
                       children: [
@@ -677,6 +850,7 @@ class _AgendarCitaPageState extends State<AgendarCitaPage> {
                     const SizedBox(height: 8),
                     Text(
                       '• Las citas tienen una duración de 30 minutos\n'
+                          '• No puedes agendar en horarios ocupados por el mismo médico\n'
                           '• Puedes cancelar o modificar hasta 2 horas antes\n'
                           '• Llega 10 minutos antes de tu cita',
                       style: TextStyle(
